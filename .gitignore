@@ -1,0 +1,20 @@
+# Binary
+kube-pilot
+kube-pilot-cli
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Config with secrets
+config.yaml
+!config.example.yaml
+
+# Go
+vendor/
+kubeconfig.yaml

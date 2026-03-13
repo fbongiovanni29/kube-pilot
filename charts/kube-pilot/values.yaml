@@ -1,0 +1,107 @@
+# kube-pilot configuration
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/fbongiovanni29/kube-pilot
+  tag: latest
+  pullPolicy: IfNotPresent
+  pullSecret: ""
+
+# LLM provider configuration
+llm:
+  # Any OpenAI-compatible API: anthropic, openai, ollama
+  provider: anthropic
+  baseURL: https://api.anthropic.com
+  model: claude-sonnet-4-6
+  # API key — stored in Vault, referenced via ExternalSecret
+  apiKey: ""
+
+# Git provider: gitea (bundled) or github (external)
+git:
+  provider: gitea     # gitea or github
+
+# Gitea settings (when git.provider=gitea)
+# Webhook is automatic — same cluster network, no public URL needed.
+
+# GitHub settings (when git.provider=github)
+github:
+  mode: poll           # poll (no public URL needed) or webhook
+  pollInterval: 30s
+  webhookSecret: ""
+  repos: []
+
+# Git repo for infrastructure manifests
+cluster:
+  infraRepo: kube-pilot/infra
+
+# Webhook server
+service:
+  type: ClusterIP
+  port: 8080
+
+ingress:
+  enabled: false
+  className: ""
+  host: ""
+  annotations: {}
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+# --- Platform components (all optional) ---
+
+gitea:
+  enabled: true
+  gitea:
+    admin:
+      username: kube-pilot
+      password: ""           # Set at install time
+      email: admin@local
+      passwordMode: keepUpdated  # Prevents must-change-password blocking API auth
+    config:
+      server:
+        ROOT_URL: http://kube-pilot-gitea-http.kube-pilot.svc:3000
+        DOMAIN: kube-pilot-gitea-http.kube-pilot.svc
+      packages:
+        ENABLED: true        # Container registry
+        CHUNKED_UPLOAD_PATH: /data/gitea/tmp/package-upload
+      actions:
+        ENABLED: true        # Gitea Actions (available but Tekton is primary CI)
+      webhook:
+        ALLOWED_HOST_LIST: "*"
+  persistence:
+    enabled: true
+    size: 5Gi
+
+vault:
+  enabled: true
+  server:
+    dev:
+      enabled: true         # Dev mode for quick start — disable in production
+    dataStorage:
+      size: 1Gi
+
+externalSecrets:
+  enabled: true
+
+argocd:
+  enabled: true
+  argo-cd:
+    server:
+      extraArgs:
+        - --insecure       # TLS terminated at ingress
+
+tekton:
+  enabled: true
+
+externalDNS:
+  enabled: false
+
+crossplane:
+  enabled: false

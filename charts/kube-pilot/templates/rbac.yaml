@@ -1,0 +1,78 @@
+# Read-only cluster access for kube-pilot
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-reader
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+rules:
+  # Read everything — pods, deployments, services, events, logs, etc.
+  - apiGroups: ["", "apps", "batch", "networking.k8s.io", "rbac.authorization.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # Read ArgoCD resources
+  - apiGroups: ["argoproj.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # Read Tekton resources
+  - apiGroups: ["tekton.dev"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # Read ExternalSecrets resources
+  - apiGroups: ["external-secrets.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # Read ExternalDNS resources
+  - apiGroups: ["externaldns.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  # Read CRDs
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  # Read pod logs
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+---
+# Write access only for Tekton PipelineRuns
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-pipeline-runner
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["tekton.dev"]
+    resources: ["pipelineruns", "taskruns"]
+    verbs: ["create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-reader
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kube-pilot.fullname" . }}-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kube-pilot.fullname" . }}
+    namespace: kube-pilot
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-pipeline-runner
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "kube-pilot.fullname" . }}-pipeline-runner
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kube-pilot.fullname" . }}
+    namespace: kube-pilot

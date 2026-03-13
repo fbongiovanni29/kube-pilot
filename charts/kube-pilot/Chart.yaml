@@ -1,0 +1,37 @@
+apiVersion: v2
+name: kube-pilot
+description: AI-powered Kubernetes platform operator — one chart, complete platform
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+
+dependencies:
+  - name: vault
+    version: 0.32.0
+    repository: https://helm.releases.hashicorp.com
+    condition: vault.enabled
+
+  - name: external-secrets
+    version: 2.1.0
+    repository: https://charts.external-secrets.io
+    condition: externalSecrets.enabled
+
+  - name: argo-cd
+    version: 9.4.9
+    repository: https://argoproj.github.io/argo-helm
+    condition: argocd.enabled
+
+  - name: tekton-pipeline
+    version: 1.9.1
+    repository: https://cdfoundation.github.io/tekton-helm-chart
+    condition: tekton.enabled
+
+  - name: gitea
+    version: 12.5.0
+    repository: https://dl.gitea.com/charts/
+    condition: gitea.enabled
+
+  - name: external-dns
+    version: 1.20.0
+    repository: https://kubernetes-sigs.github.io/external-dns
+    condition: externalDNS.enabled

@@ -1,0 +1,33 @@
+# kube-pilot configuration
+
+llm:
+  # Any OpenAI-compatible API: Anthropic, OpenAI, Ollama, LiteLLM, vLLM
+  provider: anthropic
+  base_url: https://api.anthropic.com
+  api_key: ${ANTHROPIC_API_KEY}
+  model: claude-sonnet-4-6
+  timeout: 120s
+
+github:
+  # Webhook secret for signature verification (optional but recommended)
+  webhook_secret: ${GITHUB_WEBHOOK_SECRET}
+
+  # Repos to watch for issues/comments
+  repos:
+    - fbongiovanni29/kube-pilot
+    # - fbongiovanni29/infra
+
+server:
+  address: ":8080"
+
+cluster:
+  # Git repo for infrastructure manifests (ArgoCD, Tekton, etc.)
+  infra_repo: fbongiovanni29/infra
+
+# Cross-session context system (optional)
+context:
+  enabled: true
+  # Repo where kube-pilot stores cross-session insights
+  repo: kube-pilot/kube-pilot-context
+  # File to read from repos for agent instructions (default: AGENTS.md)
+  agents_file: AGENTS.md

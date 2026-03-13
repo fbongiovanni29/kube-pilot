@@ -1,0 +1,42 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-config
+  namespace: kube-pilot
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    llm:
+      provider: {{ .Values.llm.provider }}
+      base_url: {{ .Values.llm.baseURL }}
+      api_key: ${LLM_API_KEY}
+      model: {{ .Values.llm.model }}
+      timeout: 120s
+
+    git:
+      provider: {{ .Values.git.provider }}
+
+    {{- if eq .Values.git.provider "gitea" }}
+    gitea:
+      url: http://{{ .Release.Name }}-gitea-http.{{ .Release.Namespace }}.svc:3000
+      admin_user: {{ .Values.gitea.gitea.admin.username }}
+      admin_password: ${GITEA_ADMIN_PASSWORD}
+    {{- end }}
+
+    {{- if eq .Values.git.provider "github" }}
+    github:
+      mode: {{ .Values.github.mode }}
+      poll_interval: {{ .Values.github.pollInterval }}
+      webhook_secret: ${GITHUB_WEBHOOK_SECRET}
+      repos:
+        {{- range .Values.github.repos }}
+        - {{ . }}
+        {{- end }}
+    {{- end }}
+
+    server:
+      address: ":8080"
+
+    cluster:
+      infra_repo: {{ .Values.cluster.infraRepo }}

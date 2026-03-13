@@ -1,0 +1,169 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+func TestLoadBasic(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+llm:
+  provider: anthropic
+  base_url: https://api.anthropic.com
+  api_key: sk-test
+  model: claude-sonnet-4-6
+git:
+  provider: gitea
+gitea:
+  url: http://gitea:3000
+  admin_user: admin
+  admin_password: secret
+server:
+  address: ":9090"
+cluster:
+  infra_repo: kube-pilot/infra
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.LLM.Provider != "anthropic" {
+		t.Errorf("LLM.Provider = %q, want %q", cfg.LLM.Provider, "anthropic")
+	}
+	if cfg.LLM.BaseURL != "https://api.anthropic.com" {
+		t.Errorf("LLM.BaseURL = %q", cfg.LLM.BaseURL)
+	}
+	if cfg.LLM.APIKey != "sk-test" {
+		t.Errorf("LLM.APIKey = %q", cfg.LLM.APIKey)
+	}
+	if cfg.LLM.Model != "claude-sonnet-4-6" {
+		t.Errorf("LLM.Model = %q", cfg.LLM.Model)
+	}
+	if cfg.LLM.Timeout != 120*time.Second {
+		t.Errorf("LLM.Timeout = %v, want 120s", cfg.LLM.Timeout)
+	}
+	if cfg.Git.Provider != "gitea" {
+		t.Errorf("Git.Provider = %q, want %q", cfg.Git.Provider, "gitea")
+	}
+	if cfg.Gitea.URL != "http://gitea:3000" {
+		t.Errorf("Gitea.URL = %q", cfg.Gitea.URL)
+	}
+	if cfg.Gitea.AdminUser != "admin" {
+		t.Errorf("Gitea.AdminUser = %q", cfg.Gitea.AdminUser)
+	}
+	if cfg.Server.Address != ":9090" {
+		t.Errorf("Server.Address = %q", cfg.Server.Address)
+	}
+	if cfg.Cluster.InfraRepo != "kube-pilot/infra" {
+		t.Errorf("Cluster.InfraRepo = %q", cfg.Cluster.InfraRepo)
+	}
+}
+
+func TestLoadDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+llm:
+  provider: openai
+  model: gpt-4
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Server.Address != ":8080" {
+		t.Errorf("default Server.Address = %q, want %q", cfg.Server.Address, ":8080")
+	}
+	if cfg.LLM.Timeout != 120*time.Second {
+		t.Errorf("default LLM.Timeout = %v, want 120s", cfg.LLM.Timeout)
+	}
+	if cfg.Git.Provider != "github" {
+		t.Errorf("default Git.Provider = %q, want %q", cfg.Git.Provider, "github")
+	}
+}
+
+func TestLoadEnvExpansion(t *testing.T) {
+	t.Setenv("TEST_API_KEY", "expanded-key")
+	t.Setenv("TEST_GITEA_PASS", "expanded-pass")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+llm:
+  api_key: ${TEST_API_KEY}
+gitea:
+  admin_password: ${TEST_GITEA_PASS}
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.LLM.APIKey != "expanded-key" {
+		t.Errorf("LLM.APIKey = %q, want %q", cfg.LLM.APIKey, "expanded-key")
+	}
+	if cfg.Gitea.AdminPassword != "expanded-pass" {
+		t.Errorf("Gitea.AdminPassword = %q, want %q", cfg.Gitea.AdminPassword, "expanded-pass")
+	}
+}
+
+func TestLoadGitHubConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+git:
+  provider: github
+github:
+  mode: poll
+  poll_interval: 30s
+  webhook_secret: gh-secret
+  repos:
+    - org/repo1
+    - org/repo2
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Git.Provider != "github" {
+		t.Errorf("Git.Provider = %q", cfg.Git.Provider)
+	}
+	if cfg.GitHub.Mode != "poll" {
+		t.Errorf("GitHub.Mode = %q", cfg.GitHub.Mode)
+	}
+	if cfg.GitHub.WebhookSecret != "gh-secret" {
+		t.Errorf("GitHub.WebhookSecret = %q", cfg.GitHub.WebhookSecret)
+	}
+	if len(cfg.GitHub.Repos) != 2 {
+		t.Errorf("GitHub.Repos len = %d, want 2", len(cfg.GitHub.Repos))
+	}
+}
+
+func TestLoadFileNotFound(t *testing.T) {
+	_, err := Load("/nonexistent/config.yaml")
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestLoadInvalidYAML(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`{{{not yaml`), 0644)
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("expected error for invalid YAML")
+	}
+}

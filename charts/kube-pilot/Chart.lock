@@ -1,0 +1,21 @@
+dependencies:
+- name: vault
+  repository: https://helm.releases.hashicorp.com
+  version: 0.32.0
+- name: external-secrets
+  repository: https://charts.external-secrets.io
+  version: 2.1.0
+- name: argo-cd
+  repository: https://argoproj.github.io/argo-helm
+  version: 9.4.9
+- name: tekton-pipeline
+  repository: https://cdfoundation.github.io/tekton-helm-chart
+  version: 1.9.1
+- name: gitea
+  repository: https://dl.gitea.com/charts/
+  version: 12.5.0
+- name: external-dns
+  repository: https://kubernetes-sigs.github.io/external-dns
+  version: 1.20.0
+digest: sha256:3a7fe76a2d049fca0766bf3c3684580023376416762d74d3e39307adc60fb295
+generated: "2026-03-11T17:36:00.338322583-04:00"
