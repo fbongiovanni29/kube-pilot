@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 
+	"github.com/fbongiovanni29/kube-pilot/internal/bootstrap"
 	"github.com/fbongiovanni29/kube-pilot/internal/config"
 	"github.com/fbongiovanni29/kube-pilot/internal/controller"
 	"github.com/fbongiovanni29/kube-pilot/internal/llm"
@@ -41,6 +43,9 @@ func main() {
 		gitea = tools.NewGiteaClient(cfg.Gitea.URL, cfg.Gitea.AdminUser, cfg.Gitea.AdminPassword)
 		logger.Info("using gitea as git provider", "url", cfg.Gitea.URL)
 	}
+
+	// Bootstrap infrastructure (idempotent — creates repos, webhooks, labels, secrets)
+	bootstrap.Run(context.Background(), cfg, gitea, logger)
 
 	// Set up webhook handler
 	webhook := controller.NewWebhookHandler(cfg, client, gitea, logger)
