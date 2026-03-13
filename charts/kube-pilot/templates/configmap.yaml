@@ -40,3 +40,10 @@ data:
 
     cluster:
       infra_repo: {{ .Values.cluster.infraRepo }}
+
+    {{- if .Values.context.enabled }}
+    context:
+      enabled: true
+      repo: {{ .Values.context.repo }}
+      agents_file: {{ .Values.context.agentsFile | default "AGENTS.md" }}
+    {{- end }}

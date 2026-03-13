@@ -35,6 +35,12 @@ github:
 cluster:
   infraRepo: kube-pilot/infra
 
+# Cross-session context system
+context:
+  enabled: true
+  repo: kube-pilot/kube-pilot-context
+  agentsFile: AGENTS.md
+
 # Webhook server
 service:
   type: ClusterIP
