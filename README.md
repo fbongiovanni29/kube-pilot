@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.png" alt="kube-pilot — The engineer that lives in your cluster" width="100%">
+</p>
+
 # kube-pilot
 
 **An AI engineer that runs in your Kubernetes cluster with access to all your dev tools.**
