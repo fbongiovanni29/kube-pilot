@@ -1,0 +1,22 @@
+{{- if and .Values.certManager.enabled .Values.ingress.clusterIssuer }}
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: {{ .Values.ingress.clusterIssuer }}
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+spec:
+  acme:
+    {{- if eq .Values.ingress.clusterIssuer "letsencrypt-staging" }}
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    {{- else }}
+    server: https://acme-v02.api.letsencrypt.org/directory
+    {{- end }}
+    email: {{ .Values.certManager.acmeEmail | default "admin@example.com" }}
+    privateKeySecretRef:
+      name: {{ .Values.ingress.clusterIssuer }}-account-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: {{ .Values.ingress.className | default "traefik" }}
+{{- end }}

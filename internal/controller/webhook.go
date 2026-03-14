@@ -436,6 +436,10 @@ func (h *WebhookHandler) createAgent(repoFullName string) *agent.Agent {
 		opts = append(opts, agent.WithContextStore(h.contextStore))
 	}
 
+	if h.cfg.Ingress.Enabled {
+		opts = append(opts, agent.WithIngressConfig(&h.cfg.Ingress))
+	}
+
 	return agent.New(h.client, h.gitea, giteaInfo, h.logger, opts...)
 }
 

@@ -55,3 +55,16 @@ data:
       repo: {{ .Values.context.repo }}
       agents_file: {{ .Values.context.agentsFile | default "AGENTS.md" }}
     {{- end }}
+
+    {{- if .Values.ingress.enabled }}
+    ingress:
+      enabled: true
+      class_name: {{ .Values.ingress.className | default "traefik" }}
+      {{- if .Values.ingress.host }}
+      domain: {{ .Values.ingress.host }}
+      {{- end }}
+      tls_enabled: {{ .Values.ingress.tls | default false }}
+      {{- if .Values.ingress.clusterIssuer }}
+      cluster_issuer: {{ .Values.ingress.clusterIssuer }}
+      {{- end }}
+    {{- end }}

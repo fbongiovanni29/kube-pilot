@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/fbongiovanni29/kube-pilot/internal/config"
 	kpctx "github.com/fbongiovanni29/kube-pilot/internal/context"
 	"github.com/fbongiovanni29/kube-pilot/internal/llm"
 	"github.com/fbongiovanni29/kube-pilot/internal/tools"
@@ -73,7 +74,6 @@ Important:
 Rules:
 - ALL persistent cluster changes go through git → ArgoCD (kubectl apply is fine for one-shot Tekton TaskRuns)
 - For secrets, create ExternalSecret resources that reference Vault
-- For DNS, create ExternalDNS resources
 - Always explain what you're about to do before doing it
 - If something fails: read logs, diagnose, fix the code, and retry
 - If you can't fix it after 3 attempts, escalate to the user
@@ -98,6 +98,7 @@ type Agent struct {
 	repoContext    string // content from AGENTS.md
 	projectContext string // cross-session insights from context store
 	contextStore   *kpctx.Store
+	ingressConfig  *config.IngressConfig
 	inbox          chan string // mid-flight messages injected between steps
 	workDir        string     // unique temp directory for this agent's shell commands
 }
@@ -152,6 +153,11 @@ func WithContextStore(store *kpctx.Store) Option {
 	return func(a *Agent) { a.contextStore = store }
 }
 
+// WithIngressConfig tells the agent how to expose services via Ingress.
+func WithIngressConfig(cfg *config.IngressConfig) Option {
+	return func(a *Agent) { a.ingressConfig = cfg }
+}
+
 // knownSecrets returns secret values that should be scrubbed from public output.
 func (a *Agent) knownSecrets() []string {
 	var secrets []string
@@ -192,6 +198,22 @@ func (a *Agent) systemPrompt() string {
 	}
 	if a.projectContext != "" {
 		prompt += fmt.Sprintf("\n## Prior Insights (from previous runs)\n%s\n", a.projectContext)
+	}
+	if a.ingressConfig != nil && a.ingressConfig.Enabled {
+		prompt += fmt.Sprintf(`
+## Ingress & DNS
+
+Services should be exposed externally via Ingress resources. When deploying a service:
+- Create an Ingress resource in the app's manifests (apps/<app-name>/ingress.yaml)
+- Use ingressClassName: %s
+- Services get a hostname of <service-name>.%s
+- ExternalDNS will automatically create DNS records from Ingress resources
+`, a.ingressConfig.ClassName, a.ingressConfig.Domain)
+		if a.ingressConfig.TLSEnabled && a.ingressConfig.ClusterIssuer != "" {
+			prompt += fmt.Sprintf(`- Enable TLS: add the annotation cert-manager.io/cluster-issuer: %s
+- Add a tls block with the host and a secretName of <service-name>-tls
+`, a.ingressConfig.ClusterIssuer)
+		}
 	}
 	prompt += systemPromptSuffix
 	if a.contextStore != nil {

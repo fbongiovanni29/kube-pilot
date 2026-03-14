@@ -17,6 +17,7 @@ type Config struct {
 	Server  ServerConfig  `yaml:"server"`
 	Cluster ClusterConfig `yaml:"cluster"`
 	Context ContextConfig `yaml:"context"`
+	Ingress IngressConfig `yaml:"ingress"`
 }
 
 // ContextConfig holds settings for the cross-session context system.
@@ -68,6 +69,15 @@ type ServerConfig struct {
 type ClusterConfig struct {
 	InfraRepo   string `yaml:"infra_repo"`   // Git repo for infra manifests
 	RegistryURL string `yaml:"registry_url"` // Container registry URL (e.g. "registry.local:5000")
+}
+
+// IngressConfig tells the agent how to expose services externally.
+type IngressConfig struct {
+	Enabled        bool   `yaml:"enabled"`
+	ClassName      string `yaml:"class_name"`      // e.g. "traefik"
+	Domain         string `yaml:"domain"`           // e.g. "apps.example.com" — services get <name>.<domain>
+	TLSEnabled     bool   `yaml:"tls_enabled"`      // create TLS-terminated ingresses
+	ClusterIssuer  string `yaml:"cluster_issuer"`   // cert-manager ClusterIssuer name (e.g. "letsencrypt-prod")
 }
 
 // Load reads config from a YAML file with env var expansion.

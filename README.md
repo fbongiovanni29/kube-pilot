@@ -96,6 +96,9 @@ One `helm install` gives you:
 | **ArgoCD** | GitOps — watches infra repo, syncs manifests to cluster |
 | **Vault** | Secrets storage (optional) |
 | **External Secrets** | Vault → Kubernetes secret sync (optional) |
+| **Traefik** | Ingress controller — routes external traffic to services (optional) |
+| **cert-manager** | Automatic TLS certificates via Let's Encrypt (optional) |
+| **ExternalDNS** | Automatic DNS records from Ingress resources (optional) |
 
 Everything runs in-cluster. No public URLs. No SaaS accounts. No Docker Hub.
 
@@ -241,6 +244,12 @@ vault:
   enabled: true        # Secrets management
 externalSecrets:
   enabled: true        # Vault → k8s secret sync
+traefik:
+  enabled: false       # Ingress controller
+certManager:
+  enabled: false       # Automatic TLS certificates
+externalDNS:
+  enabled: false       # Automatic DNS from Ingress resources
 ```
 
 ---

@@ -55,9 +55,11 @@ service:
 
 ingress:
   enabled: false
-  className: ""
-  host: ""
+  className: traefik
+  host: ""              # e.g. "apps.example.com" — services get <name>.apps.example.com
   annotations: {}
+  tls: false
+  clusterIssuer: ""     # cert-manager ClusterIssuer (e.g. "letsencrypt-prod")
 
 resources:
   requests:
@@ -113,8 +115,55 @@ argocd:
 tekton:
   enabled: true
 
+certManager:
+  enabled: false
+  # cert-manager subchart values — see https://cert-manager.io/docs/installation/helm/
+  acmeEmail: ""         # Email for Let's Encrypt registration
+  crds:
+    enabled: true       # Install CRDs with the chart
+
+traefik:
+  enabled: false
+  # Traefik subchart values — see https://github.com/traefik/traefik-helm-chart
+  # Sensible defaults for kube-pilot; override as needed.
+  ingressClass:
+    enabled: true
+    isDefaultClass: true
+  ports:
+    web:
+      port: 8000
+      exposedPort: 80
+    websecure:
+      port: 8443
+      exposedPort: 443
+  service:
+    type: LoadBalancer    # NodePort for bare metal / k3s without cloud LB
+  # Enable dashboard for debugging (disable in production)
+  ingressRoute:
+    dashboard:
+      enabled: false
+
 externalDNS:
   enabled: false
+  # ExternalDNS subchart values — see https://kubernetes-sigs.github.io/external-dns
+  # Set your DNS provider and domain filters. Credentials are injected from the
+  # external-dns-credentials secret (synced from Vault if vault.enabled, or create manually).
+  #
+  # Provider env vars to put in the secret:
+  #   Cloudflare:  CF_API_TOKEN
+  #   AWS Route53: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY (or use IRSA)
+  #   Google:      GOOGLE_APPLICATION_CREDENTIALS (mount a service account JSON)
+  #   Azure:       AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET
+  #   DigitalOcean: DO_TOKEN
+  provider:
+    name: ""              # cloudflare, aws, google, azure, digitalocean, etc.
+  envFrom:
+    - secretRef:
+        name: external-dns-credentials
+  domainFilters: []       # e.g. ["apps.yourdomain.com"]
+  policy: upsert-only     # upsert-only = safe, sync = deletes stale records
+  sources:
+    - ingress
 
 crossplane:
   enabled: false
