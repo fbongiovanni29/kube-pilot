@@ -14,15 +14,15 @@ github:
 
   # Repos to watch for issues/comments
   repos:
-    - fbongiovanni29/kube-pilot
-    # - fbongiovanni29/infra
+    - your-org/your-repo
+    # - your-org/infra
 
 server:
   address: ":8080"
 
 cluster:
   # Git repo for infrastructure manifests (ArgoCD, Tekton, etc.)
-  infra_repo: fbongiovanni29/infra
+  infra_repo: your-org/infra
 
 # Cross-session context system (optional)
 context:

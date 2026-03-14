@@ -35,7 +35,7 @@ rules:
     resources: ["pods/log"]
     verbs: ["get"]
 ---
-# Write access only for Tekton PipelineRuns
+# Tekton write access (cluster-wide for task runs in any namespace)
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -46,10 +46,6 @@ rules:
   - apiGroups: ["tekton.dev"]
     resources: ["pipelineruns", "taskruns"]
     verbs: ["create", "delete"]
-  # Bootstrap: create secrets for ArgoCD repo access and registry auth
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["create", "get", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -76,6 +72,64 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "kube-pilot.fullname" . }}-pipeline-runner
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kube-pilot.fullname" . }}
+    namespace: kube-pilot
+---
+# Secrets access scoped to kube-pilot namespace only
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-secrets
+  namespace: kube-pilot
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-secrets
+  namespace: kube-pilot
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kube-pilot.fullname" . }}-secrets
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kube-pilot.fullname" . }}
+    namespace: kube-pilot
+---
+# Secrets access scoped to default namespace (for registry auth during builds)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-secrets
+  namespace: default
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["create", "get", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-secrets
+  namespace: default
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "kube-pilot.fullname" . }}-secrets
 subjects:
   - kind: ServiceAccount
     name: {{ include "kube-pilot.fullname" . }}
