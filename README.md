@@ -1,6 +1,4 @@
-<p align="center">
-  <img src="docs/banner.png" alt="kube-pilot — The engineer that lives in your cluster" width="100%">
-</p>
+![kube-pilot — The engineer that lives in your cluster](docs/banner.png)
 
 # kube-pilot
 
