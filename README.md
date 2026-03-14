@@ -70,7 +70,7 @@ It's not an ops bot. It's not a chatbot with kubectl access. It's an autonomous 
        │◄──────────────────────│
 ```
 
-Triggers can also come from **Alertmanager** — a firing alert (e.g. pod crash loop, high error rate) becomes an issue that kube-pilot investigates and fixes autonomously.
+Triggers can also come from **Alertmanager*** — a firing alert (e.g. pod crash loop, high error rate) becomes an issue that kube-pilot investigates and fixes autonomously.
 
 ### The agent loop
 
@@ -281,7 +281,7 @@ internal/
 **Integrations:**
 - [ ] Slack* — receive tasks and post updates in channels
 - [ ] Jira* — pick up tickets, update status, link PRs
-- [ ] Alertmanager — auto-create issues from firing alerts, kube-pilot investigates and fixes
+- [ ] Alertmanager* — auto-create issues from firing alerts, kube-pilot investigates and fixes
 - [ ] GitHub webhook mode (currently Gitea-native, GitHub via polling)
 
 **Observability:**
