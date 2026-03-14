@@ -1,11 +1,11 @@
 # kube-pilot
 
-**Your AI senior engineer with cluster access.**
+**An AI engineer that runs in your Kubernetes cluster with access to all your dev tools.**
 
-Open a Gitea issue. kube-pilot writes the code, builds the container, deploys it to Kubernetes, verifies it's running, and closes the issue. If it crashes, kube-pilot reads the logs, fixes the bug, and redeploys. No human in the loop.
+You talk to it the way you already work — file a GitHub issue, drop a message in Slack, update a Jira ticket. kube-pilot picks it up, writes the code, builds the container, deploys it, verifies it's running, and closes the ticket. If it crashes, it reads the logs, fixes the bug, and redeploys.
 
 ```
-You: "Build a Go REST API for document storage. Deploy it to the cluster."
+You (GitHub issue): "Build a Go REST API for document storage. Deploy it to the cluster."
 
 kube-pilot:
   1. Creates the repo, writes main.go + Dockerfile
@@ -17,15 +17,15 @@ kube-pilot:
   7. Comments "Done. docs-api running at docs-api.default.svc:8080" → closes issue
 ```
 
-> **Status:** Proof of concept. Runs on a single k3s node. [See it deploy a full office suite from scratch.](#demo-clouddesk-office-suite)
+> **Status:** Proof of concept — tested with Gitea + Claude on a single k3s node. [See it deploy a full office suite from scratch.](#demo-clouddesk-office-suite)
 
 ---
 
 ## What makes this different
 
-Every AI coding tool stops at "here's some code." You still have to build it, containerize it, deploy it, debug it, and iterate. The feedback loop is broken.
+AI coding tools generate code. Then you copy it, build it, deploy it, debug it, and iterate manually. The feedback loop is broken.
 
-kube-pilot is the full loop:
+kube-pilot closes the loop. It lives inside the cluster with direct access to every tool in your dev stack — git, CI/CD, container registry, deployment pipelines, kubectl, monitoring. You communicate with it through the tools you already use (GitHub, Slack, Jira), and it acts with all the tools in your cluster.
 
 | AI coding tools | kube-pilot |
 |----------------|------------|
@@ -34,7 +34,7 @@ kube-pilot is the full loop:
 | You deploy it | Deploys it (git push + ArgoCD) |
 | You debug it | Reads logs, fixes, redeploys |
 | You verify it | Curls endpoints, checks health |
-| You close the ticket | Closes the issue |
+| You close the ticket | Closes the ticket |
 
 It's not an ops bot. It's not a chatbot with kubectl access. It's an autonomous software engineer that happens to live inside your cluster.
 
@@ -44,7 +44,7 @@ It's not an ops bot. It's not a chatbot with kubectl access. It's an autonomous 
 
 ```
   Issue opened             kube-pilot                     Cluster
-  in Gitea/GitHub          (AI agent)
+  (GitHub/Gitea/Slack)     (AI agent)
        │                       │
        │    webhook            │
        ├──────────────────────►│
@@ -70,7 +70,7 @@ It's not an ops bot. It's not a chatbot with kubectl access. It's an autonomous 
 
 ### The agent loop
 
-kube-pilot is a tool-calling agent. The LLM receives the issue, decides what tools to call (`exec`, `git_comment`, `read_file`, `create_pr`, etc.), executes them, observes the results, and iterates. If a build fails, it reads the logs and fixes the code. If a deployment crashes, it checks `kubectl describe` and adjusts the manifests. It runs up to 75 steps before giving up.
+kube-pilot is a tool-calling agent. The LLM receives the task, decides what tools to call (`exec`, `git_comment`, `read_file`, `create_pr`, etc.), executes them, observes the results, and iterates. If a build fails, it reads the logs and fixes the code. If a deployment crashes, it checks `kubectl describe` and adjusts the manifests. It runs up to 75 steps before giving up.
 
 ### What's in the box
 
@@ -112,7 +112,7 @@ kube-pilot remembers what it learns. If it discovers that a repo needs a specifi
 If a second comment arrives while the agent is working, it gets injected into the running conversation — the agent adjusts its approach without restarting.
 
 ### Credential scrubbing
-Before posting any comment or PR, kube-pilot scrubs known secrets and common credential patterns. Passwords, tokens, and API keys are redacted automatically.
+Before posting any comment or PR, kube-pilot scrubs known secrets and common credential patterns. Passwords, tokens, and API keys are redacted before they reach the LLM or any public output.
 
 ### Automatic retry with backoff
 Rate-limited by the LLM provider? kube-pilot retries with exponential backoff and respects `Retry-After` headers. No dropped tasks.
@@ -159,7 +159,7 @@ Watch the issue. kube-pilot picks it up, does the work, and closes it when done.
 
 ## Demo: CloudDesk office suite
 
-The [`demo/`](demo/) directory contains a complete multi-service office productivity suite called **CloudDesk** — four microservices that kube-pilot can build and deploy from scratch, entirely from Gitea issues.
+The [`demo/`](demo/) directory contains a complete multi-service office productivity suite called **CloudDesk** — four microservices that kube-pilot can build and deploy from scratch, entirely from Git issues.
 
 | Service | What it does |
 |---------|-------------|
@@ -195,7 +195,7 @@ llm:
   apiKey: ${LLM_API_KEY}
 ```
 
-**Tested with:** Claude (Anthropic), GPT-4 (OpenAI), Ollama (local models). For Ollama, point `baseURL` at your Ollama service and pick a model.
+Currently tested with Claude (Anthropic). Should work with any OpenAI-compatible endpoint (GPT-4, Ollama, LiteLLM, vLLM). For Ollama, point `baseURL` at your Ollama service and pick a model.
 
 ### Git provider
 
@@ -248,7 +248,7 @@ kube-pilot is **read-only against the cluster** for persistent changes. All muta
 - Every change is reversible (git revert)
 - ArgoCD is the only thing that writes to the cluster
 - Exception: Tekton TaskRuns (CI jobs), created directly by kube-pilot
-- Credentials are scrubbed from all public output (comments, PRs)
+- Credentials are scrubbed before reaching the LLM and before any public output (comments, PRs)
 - Bot ignores its own webhook events (no self-triggering loops)
 
 ---
@@ -280,10 +280,20 @@ internal/
 - [x] Credential scrubbing
 - [x] Rate limit retry with backoff
 - [x] Failure recovery notifications
+
+**Integrations:**
+- [ ] Slack — receive tasks and post updates in channels
+- [ ] Jira — pick up tickets, update status, link PRs
 - [ ] GitHub webhook mode (currently Gitea-native, GitHub via polling)
+
+**Observability:**
+- [ ] Prometheus metrics — agent runs, step counts, success/failure rates
+- [ ] Grafana dashboards — task throughput, LLM latency, build times
+- [ ] Loki log aggregation — structured agent logs with trace IDs
+
+**Infrastructure:**
+- [ ] Multi-environment hub & spoke — central kube-pilot managing dev/staging/prod clusters via Crossplane
 - [ ] Web UI for task history and observability
-- [ ] Multi-cluster support (hub manages spoke clusters)
-- [ ] Crossplane integration for cloud resource provisioning
 - [ ] Self-management (kube-pilot upgrades itself via ArgoCD)
 
 ---
