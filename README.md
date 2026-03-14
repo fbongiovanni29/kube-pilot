@@ -4,9 +4,9 @@
 
 > **This is a proof of concept.** It works — we've deployed a full multi-service app from scratch on a single k3s node — but it's early. Expect rough edges.
 
-**An AI engineer that runs in your Kubernetes cluster with access to all your dev tools.**
+**A headless AI engineer that runs in your Kubernetes cluster with access to all your dev tools.**
 
-You talk to it the way you already work — file a GitHub issue, and it picks it up, writes the code, builds the container, deploys it, verifies it's running, and closes the ticket. If it crashes, it reads the logs, fixes the bug, and redeploys. Slack and Jira integrations are coming*.
+There's no UI. You talk to it the way you already work — file a GitHub issue, and it picks it up, writes the code, builds the container, deploys it, verifies it's running, and closes the ticket. If it crashes, it reads the logs, fixes the bug, and redeploys. Slack and Jira integrations are coming*.
 
 ```
 You (GitHub issue): "Build a Go REST API for document storage. Deploy it to the cluster."
@@ -295,6 +295,12 @@ internal/
 - [ ] Self-management (kube-pilot upgrades itself via ArgoCD)
 
 *\* Planned — not yet implemented*
+
+---
+
+## Development
+
+Most of kube-pilot's codebase was developed using [Claude Code](https://claude.com/claude-code) for budget reasons — running kube-pilot itself for every code change burns LLM tokens. kube-pilot has been tested end-to-end on its own cluster (writing code, building images, deploying services, and closing issues autonomously), but day-to-day development used Claude Code to keep API costs down.
 
 ---
 

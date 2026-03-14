@@ -331,13 +331,20 @@ func (h *WebhookHandler) providerName() string {
 func (h *WebhookHandler) dispatch(key issueKey, task, repoFullName string) {
 	h.mu.Lock()
 	if a, ok := h.agents[key]; ok {
-		// Agent already running — inject the new context into its conversation
-		h.logger.Info("injecting into running agent",
-			"repo", key.repo, "issue", key.issueNumber)
+		// Slot exists — agent is running or being created
 		h.mu.Unlock()
-		a.Inject(task)
+		if a != nil {
+			h.logger.Info("injecting into running agent",
+				"repo", key.repo, "issue", key.issueNumber)
+			a.Inject(task)
+		} else {
+			h.logger.Info("agent launch in progress, skipping duplicate",
+				"repo", key.repo, "issue", key.issueNumber)
+		}
 		return
 	}
+	// Reserve the slot immediately to prevent duplicate launches from concurrent webhooks
+	h.agents[key] = nil
 	h.mu.Unlock()
 
 	go h.runAgentTracked(key, task, repoFullName)
@@ -584,8 +591,8 @@ func (h *WebhookHandler) isBotUser(username string) bool {
 	if h.cfg.Git.Provider == "gitea" && h.cfg.Gitea.AdminUser != "" {
 		return strings.EqualFold(username, h.cfg.Gitea.AdminUser)
 	}
-	// For GitHub, the bot user is typically "kube-pilot[bot]" or configured app name
-	return strings.EqualFold(username, "kube-pilot[bot]")
+	// For GitHub, the bot user is "app-name[bot]"
+	return strings.HasSuffix(strings.ToLower(username), "[bot]")
 }
 
 func hasLabel(labels []ghLabel, name string) bool {

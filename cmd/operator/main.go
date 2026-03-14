@@ -47,6 +47,23 @@ func main() {
 	// Bootstrap infrastructure (idempotent — creates repos, webhooks, labels, secrets)
 	bootstrap.Run(context.Background(), cfg, gitea, logger)
 
+	// Set up GitHub App auth if configured
+	if cfg.Git.Provider == "github" && cfg.GitHub.AppID != "" {
+		keyPath := cfg.GitHub.PrivateKeyPath
+		keyData, err := os.ReadFile(keyPath)
+		if err != nil {
+			logger.Error("failed to read github app private key", "path", keyPath, "error", err)
+			os.Exit(1)
+		}
+		ghApp, err := tools.NewGitHubAppAuth(cfg.GitHub.AppID, cfg.GitHub.InstallationID, keyData, logger)
+		if err != nil {
+			logger.Error("failed to create github app auth", "error", err)
+			os.Exit(1)
+		}
+		ghApp.StartTokenRefresh(context.Background())
+		logger.Info("github app auth configured", "app_id", cfg.GitHub.AppID)
+	}
+
 	// Set up webhook handler
 	webhook := controller.NewWebhookHandler(cfg, client, gitea, logger)
 

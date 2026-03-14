@@ -50,10 +50,13 @@ type GiteaConfig struct {
 
 // GitHubConfig holds GitHub integration settings.
 type GitHubConfig struct {
-	Mode          string   `yaml:"mode"` // poll or webhook
-	PollInterval  string   `yaml:"poll_interval"`
-	WebhookSecret string   `yaml:"webhook_secret"`
-	Repos         []string `yaml:"repos"` // Repos to watch
+	Mode           string   `yaml:"mode"` // poll or webhook
+	PollInterval   string   `yaml:"poll_interval"`
+	WebhookSecret  string   `yaml:"webhook_secret"`
+	Repos          []string `yaml:"repos"` // Repos to watch
+	AppID          string   `yaml:"app_id"`
+	InstallationID string   `yaml:"installation_id"`
+	PrivateKeyPath string   `yaml:"private_key_path"`
 }
 
 // ServerConfig holds the webhook server settings.

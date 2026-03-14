@@ -29,6 +29,11 @@ data:
       mode: {{ .Values.github.mode }}
       poll_interval: {{ .Values.github.pollInterval }}
       webhook_secret: ${GITHUB_WEBHOOK_SECRET}
+      {{- if .Values.github.app.enabled }}
+      app_id: {{ .Values.github.app.appID | quote }}
+      installation_id: {{ .Values.github.app.installationID | quote }}
+      private_key_path: /etc/github/github-app-key.pem
+      {{- end }}
       repos:
         {{- range .Values.github.repos }}
         - {{ . }}

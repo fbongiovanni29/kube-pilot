@@ -5,13 +5,27 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 )
 
 // GitHubComment posts a comment on a GitHub issue or PR using the gh CLI.
 func GitHubComment(ctx context.Context, repo string, issueNumber int, body string) error {
-	cmd := fmt.Sprintf(`gh issue comment %d --repo %s --body %s`,
-		issueNumber, repo, shellQuote(body))
+	// Write body to a temp file to preserve newlines and special characters.
+	// shellQuote (json.Marshal) escapes \n as literal \n which gh renders raw.
+	f, err := os.CreateTemp("", "gh-comment-*.md")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(body); err != nil {
+		f.Close()
+		return fmt.Errorf("write body: %w", err)
+	}
+	f.Close()
+
+	cmd := fmt.Sprintf(`gh issue comment %d --repo %s --body-file %s`,
+		issueNumber, repo, f.Name())
 	result, err := Shell(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("github comment: %w", err)
@@ -103,8 +117,19 @@ func GitHubGetIssueComments(ctx context.Context, repo string, issueNumber int) (
 
 // GitHubCreatePullRequest creates a pull request on GitHub.
 func GitHubCreatePullRequest(ctx context.Context, repo, title, body, head, base string) error {
-	cmd := fmt.Sprintf(`gh pr create --repo %s --title %s --body %s --head %s --base %s`,
-		repo, shellQuote(title), shellQuote(body), head, base)
+	f, err := os.CreateTemp("", "gh-pr-*.md")
+	if err != nil {
+		return fmt.Errorf("create temp file: %w", err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(body); err != nil {
+		f.Close()
+		return fmt.Errorf("write body: %w", err)
+	}
+	f.Close()
+
+	cmd := fmt.Sprintf(`gh pr create --repo %s --title %s --body-file %s --head %s --base %s`,
+		repo, shellQuote(title), f.Name(), head, base)
 	result, err := Shell(ctx, cmd)
 	if err != nil {
 		return fmt.Errorf("github create PR: %w", err)

@@ -30,6 +30,12 @@ github:
   pollInterval: 30s
   webhookSecret: ""
   repos: []
+  # GitHub App auth (comments as bot instead of personal account)
+  app:
+    enabled: false
+    appID: ""
+    installationID: ""
+    privateKey: ""     # PEM-encoded private key (stored in Vault if vault.enabled)
 
 # Git repo for infrastructure manifests
 cluster:

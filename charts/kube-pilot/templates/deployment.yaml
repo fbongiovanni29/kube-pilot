@@ -36,6 +36,10 @@ spec:
           envFrom:
             - secretRef:
                 name: {{ include "kube-pilot.fullname" . }}-bootstrap
+            {{- if and (eq .Values.git.provider "github") .Values.github.app.enabled }}
+            - secretRef:
+                name: {{ include "kube-pilot.fullname" . }}-github-app
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -54,7 +58,20 @@ spec:
             - name: config
               mountPath: /etc/kube-pilot
               readOnly: true
+            {{- if and (eq .Values.git.provider "github") .Values.github.app.enabled }}
+            - name: github-app-key
+              mountPath: /etc/github
+              readOnly: true
+            {{- end }}
       volumes:
         - name: config
           configMap:
             name: {{ include "kube-pilot.fullname" . }}-config
+        {{- if and (eq .Values.git.provider "github") .Values.github.app.enabled }}
+        - name: github-app-key
+          secret:
+            secretName: {{ include "kube-pilot.fullname" . }}-github-app
+            items:
+              - key: github-app-key.pem
+                path: github-app-key.pem
+        {{- end }}

@@ -33,8 +33,16 @@ Gitea (git server + container registry):
 - NEVER print, echo, log, or expose $GITEA_PASSWORD in any output
 `
 
+const systemPromptGitHub = `
+GitHub (source code hosting):
+- The source repo is on GitHub. Use the gh CLI and git_comment/git_close_issue tools.
+- Clone repos: gh repo clone <owner>/<repo> (GH_TOKEN is pre-set)
+- Use gh CLI for API operations: gh api repos/<owner>/<repo>/...
+- NEVER print, echo, or expose $GH_TOKEN in any output
+`
+
 const systemPromptSuffix = `
-Available CLI tools: kubectl, helm, git, curl, argocd (via kubectl), and any standard CLI tool.
+Available CLI tools: kubectl, helm, git, curl, gh, argocd (via kubectl), and any standard CLI tool.
 
 ## Build & Deploy
 
@@ -42,13 +50,13 @@ You have full shell access. Use it to build, deploy, and operate services end-to
 
 Building images:
 - Create a Tekton TaskRun with Kaniko to build and push container images
-- The container registry is the same host as Gitea (use --insecure and --skip-tls-verify for Kaniko)
+- The container registry is Gitea in-cluster (use --insecure and --skip-tls-verify for Kaniko)
 - Registry auth secret "gitea-registry-auth" exists in both kube-pilot and default namespaces
 - Poll the TaskRun status with kubectl until it succeeds or fails
 - If the build fails, read the logs, fix the issue, and retry
 
 Deploying:
-- Infrastructure repo: clone it, add/update manifests in apps/<app-name>/, commit, push
+- Infrastructure repo (in Gitea): clone it, add/update manifests in apps/<app-name>/, commit, push
 - ArgoCD watches the infra repo and syncs automatically
 - To create a new ArgoCD Application: kubectl apply an Application manifest pointing to apps/<app-name>/ in the infra repo
 - To force immediate sync: kubectl patch the ArgoCD Application with a sync operation
@@ -60,9 +68,7 @@ Rollback:
 
 Important:
 - Use git_comment and git_close_issue tools to interact with issues (don't curl for that)
-- For everything else (creating repos, listing repos, etc.), use curl with the Gitea API
 - Configure git before committing: git config --global user.email "kube-pilot@local" && git config --global user.name "kube-pilot"
-- Environment variables $GITEA_URL, $GITEA_USER, $GITEA_PASSWORD are available in all shell commands
 
 Rules:
 - ALL persistent cluster changes go through git → ArgoCD (kubectl apply is fine for one-shot Tekton TaskRuns)
@@ -153,7 +159,7 @@ func (a *Agent) knownSecrets() []string {
 		secrets = append(secrets, a.giteaInfo.Password)
 	}
 	// Also check environment for any leaked values
-	for _, env := range []string{"GITEA_PASSWORD", "GITHUB_TOKEN", "API_KEY"} {
+	for _, env := range []string{"GITEA_PASSWORD", "GITHUB_TOKEN", "GH_TOKEN", "API_KEY", "LLM_API_KEY"} {
 		if v := os.Getenv(env); v != "" {
 			secrets = append(secrets, v)
 		}
@@ -178,6 +184,8 @@ func (a *Agent) systemPrompt() string {
 	if a.giteaInfo != nil {
 		host := strings.TrimPrefix(strings.TrimPrefix(a.giteaInfo.URL, "http://"), "https://")
 		prompt += fmt.Sprintf(systemPromptGitea, a.giteaInfo.URL, host, a.giteaInfo.URL)
+	} else {
+		prompt += systemPromptGitHub
 	}
 	if a.repoContext != "" {
 		prompt += fmt.Sprintf("\n## Repository Context (from AGENTS.md)\n%s\n", a.repoContext)
