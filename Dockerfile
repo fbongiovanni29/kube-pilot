@@ -15,7 +15,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /kube-pilot ./cmd/oper
 # Runtime stage
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates tzdata bash curl git openssh-client
+RUN apk add --no-cache ca-certificates tzdata bash curl git openssh-client python3 jq yq ripgrep
 
 # Install kubectl
 RUN curl -sL "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl \
@@ -28,6 +28,15 @@ RUN curl -sL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
 RUN curl -sL https://github.com/cli/cli/releases/download/v2.65.0/gh_2.65.0_linux_amd64.tar.gz | tar xz -C /tmp \
     && mv /tmp/gh_2.65.0_linux_amd64/bin/gh /usr/local/bin/gh \
     && rm -rf /tmp/gh_*
+
+# Install ArgoCD CLI
+RUN curl -sL https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64 -o /usr/local/bin/argocd \
+    && chmod +x /usr/local/bin/argocd
+
+# Install Tekton CLI (tkn)
+RUN curl -sL https://github.com/tektoncd/cli/releases/download/v0.39.0/tkn_0.39.0_Linux_x86_64.tar.gz | tar xz -C /tmp \
+    && mv /tmp/tkn /usr/local/bin/tkn \
+    && rm -rf /tmp/LICENSE /tmp/README.md
 
 # Create non-root user
 RUN adduser -D -u 1000 pilot

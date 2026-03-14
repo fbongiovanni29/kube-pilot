@@ -22,10 +22,18 @@ type ShellResult struct {
 
 // Shell executes a command in a bash shell and returns the result.
 func Shell(ctx context.Context, command string) (*ShellResult, error) {
+	return ShellInDir(ctx, command, "")
+}
+
+// ShellInDir executes a command in a bash shell with the given working directory.
+func ShellInDir(ctx context.Context, command, dir string) (*ShellResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, defaultShellTimeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", command)
+	if dir != "" {
+		cmd.Dir = dir
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

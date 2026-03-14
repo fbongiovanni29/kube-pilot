@@ -34,6 +34,7 @@ github:
 # Git repo for infrastructure manifests
 cluster:
   infraRepo: kube-pilot/infra
+  registryURL: ""  # Container registry URL (auto-detected from Gitea if empty)
 
 # Cross-session context system
 context:

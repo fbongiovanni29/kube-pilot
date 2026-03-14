@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"regexp"
 	"strings"
 
 	kpctx "github.com/fbongiovanni29/kube-pilot/internal/context"
@@ -32,19 +34,29 @@ Gitea (git server + container registry):
 `
 
 const systemPromptSuffix = `
-Other tools:
-- Tekton: CI/CD — create PipelineRuns and TaskRuns (kubectl apply) to build, test, and push images
-- ArgoCD: GitOps — syncs git repos to the cluster automatically
-- Vault + ExternalSecrets: secrets management
-- kubectl, helm, git, curl, and any CLI tool via the shell
+Available CLI tools: kubectl, helm, git, curl, argocd (via kubectl), and any standard CLI tool.
 
-Workflow for building a service:
-1. Create a Gitea repo: curl -s -X POST -u $GITEA_USER:$GITEA_PASSWORD -H "Content-Type: application/json" -d '{"name":"<repo>","auto_init":true,"default_branch":"main"}' $GITEA_URL/api/v1/user/repos
-2. Clone it, write the code and Dockerfile, commit and push
-3. Create a Tekton PipelineRun (kubectl apply) to build and push the image
-4. Write Kubernetes manifests (Deployment, Service, etc.), commit to the infra repo
-5. ArgoCD detects the change and deploys it
-6. Verify the service is running — if not, read logs, fix, and redeploy
+## Build & Deploy
+
+You have full shell access. Use it to build, deploy, and operate services end-to-end.
+
+Building images:
+- Create a Tekton TaskRun with Kaniko to build and push container images
+- The container registry is the same host as Gitea (use --insecure and --skip-tls-verify for Kaniko)
+- Registry auth secret "gitea-registry-auth" exists in both kube-pilot and default namespaces
+- Poll the TaskRun status with kubectl until it succeeds or fails
+- If the build fails, read the logs, fix the issue, and retry
+
+Deploying:
+- Infrastructure repo: clone it, add/update manifests in apps/<app-name>/, commit, push
+- ArgoCD watches the infra repo and syncs automatically
+- To create a new ArgoCD Application: kubectl apply an Application manifest pointing to apps/<app-name>/ in the infra repo
+- To force immediate sync: kubectl patch the ArgoCD Application with a sync operation
+- Verify with kubectl get pods, kubectl logs, kubectl describe
+
+Rollback:
+- Revert the image tag in the infra repo deployment manifest, commit, push
+- ArgoCD will sync the rollback automatically
 
 Important:
 - Use git_comment and git_close_issue tools to interact with issues (don't curl for that)
@@ -53,8 +65,7 @@ Important:
 - Environment variables $GITEA_URL, $GITEA_USER, $GITEA_PASSWORD are available in all shell commands
 
 Rules:
-- NEVER kubectl apply directly (except Tekton PipelineRuns/TaskRuns)
-- ALL cluster changes go through git → ArgoCD
+- ALL persistent cluster changes go through git → ArgoCD (kubectl apply is fine for one-shot Tekton TaskRuns)
 - For secrets, create ExternalSecret resources that reference Vault
 - For DNS, create ExternalDNS resources
 - Always explain what you're about to do before doing it
@@ -81,21 +92,40 @@ type Agent struct {
 	repoContext    string // content from AGENTS.md
 	projectContext string // cross-session insights from context store
 	contextStore   *kpctx.Store
+	inbox          chan string // mid-flight messages injected between steps
+	workDir        string     // unique temp directory for this agent's shell commands
 }
 
 // New creates a new Agent.
 func New(client llm.Client, gitea *tools.GiteaClient, giteaInfo *GiteaInfo, logger *slog.Logger, opts ...Option) *Agent {
+	// Create a unique temp directory for this agent's shell commands
+	// to prevent working directory collisions between concurrent agents.
+	workDir, err := os.MkdirTemp("", "kube-pilot-agent-*")
+	if err != nil {
+		logger.Error("failed to create agent workdir, using default", "error", err)
+		workDir = ""
+	}
+
 	a := &Agent{
 		client:    client,
 		gitea:     gitea,
 		giteaInfo: giteaInfo,
 		logger:    logger,
-		maxSteps:  50,
+		maxSteps:  75,
+		inbox:     make(chan string, 10),
+		workDir:   workDir,
 	}
 	for _, opt := range opts {
 		opt(a)
 	}
 	return a
+}
+
+// Cleanup removes the agent's temporary working directory.
+func (a *Agent) Cleanup() {
+	if a.workDir != "" {
+		os.RemoveAll(a.workDir)
+	}
 }
 
 // Option configures an Agent.
@@ -115,6 +145,33 @@ func WithProjectContext(content string) Option {
 func WithContextStore(store *kpctx.Store) Option {
 	return func(a *Agent) { a.contextStore = store }
 }
+
+// knownSecrets returns secret values that should be scrubbed from public output.
+func (a *Agent) knownSecrets() []string {
+	var secrets []string
+	if a.giteaInfo != nil {
+		secrets = append(secrets, a.giteaInfo.Password)
+	}
+	// Also check environment for any leaked values
+	for _, env := range []string{"GITEA_PASSWORD", "GITHUB_TOKEN", "API_KEY"} {
+		if v := os.Getenv(env); v != "" {
+			secrets = append(secrets, v)
+		}
+	}
+	return secrets
+}
+
+// Inject sends a message into a running agent's conversation.
+// The message will be picked up between steps and added as a user message.
+// Safe to call from any goroutine. Non-blocking (drops if inbox is full).
+func (a *Agent) Inject(msg string) {
+	select {
+	case a.inbox <- msg:
+	default:
+		a.logger.Warn("agent inbox full, message dropped")
+	}
+}
+
 
 func (a *Agent) systemPrompt() string {
 	prompt := systemPromptBase
@@ -353,6 +410,28 @@ func (a *Agent) Run(ctx context.Context, task string) (string, error) {
 	defs := a.toolDefs()
 
 	for step := 0; step < a.maxSteps; step++ {
+		// Drain inbox — inject any mid-flight messages as user messages
+		for {
+			select {
+			case msg := <-a.inbox:
+				a.logger.Info("injecting mid-flight message")
+				messages = append(messages, llm.Message{
+					Role:    llm.RoleUser,
+					Content: fmt.Sprintf("[Update from user while you are working]\n\n%s\n\nAcknowledge this update and adjust your approach if needed.", msg),
+				})
+			default:
+				goto drained
+			}
+		}
+	drained:
+
+		// Compact context if it's getting too large
+		before := len(messages)
+		messages = compactMessages(messages)
+		if len(messages) < before {
+			a.logger.Info("compacted context", "before", before, "after", len(messages))
+		}
+
 		a.logger.Info("agent step", "step", step+1)
 
 		resp, err := a.client.Chat(ctx, messages, defs)
@@ -439,7 +518,7 @@ func (a *Agent) execShell(ctx context.Context, args string) (string, error) {
 		cmd = prefix + cmd
 	}
 
-	result, err := tools.Shell(ctx, cmd)
+	result, err := tools.ShellInDir(ctx, cmd, a.workDir)
 	if err != nil {
 		return "", err
 	}
@@ -453,6 +532,70 @@ func shellQuote(s string) string {
 	return string(b)
 }
 
+// credentialPatterns matches common credential patterns that should be redacted.
+var credentialPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(password|passwd|secret|token|api_key|apikey|auth)[\s]*[=:]\s*\S+`),
+	regexp.MustCompile(`(?i)Bearer\s+[A-Za-z0-9\-._~+/]+=*`),
+	regexp.MustCompile(`(?i)(ghp_|gho_|ghu_|ghs_|ghr_)[A-Za-z0-9_]{36,}`),
+}
+
+// scrubCredentials redacts potential credentials from text.
+func scrubCredentials(text string, extraSecrets []string) string {
+	for _, secret := range extraSecrets {
+		if secret != "" && len(secret) >= 4 {
+			text = strings.ReplaceAll(text, secret, "***REDACTED***")
+		}
+	}
+	for _, pat := range credentialPatterns {
+		text = pat.ReplaceAllString(text, "***REDACTED***")
+	}
+	return text
+}
+
+// maxMessageTokenEstimate gives a rough char count estimate for a message.
+// Used for context window management to prevent blowout.
+func messageSize(m llm.Message) int {
+	n := len(m.Content)
+	for _, tc := range m.ToolCalls {
+		n += len(tc.Function.Arguments) + len(tc.Function.Name)
+	}
+	return n
+}
+
+// compactMessages trims the middle of the conversation when it gets too long,
+// keeping the system prompt, initial task, and recent messages.
+// maxChars is the approximate character budget.
+const maxContextChars = 400_000 // ~100k tokens
+
+func compactMessages(messages []llm.Message) []llm.Message {
+	total := 0
+	for _, m := range messages {
+		total += messageSize(m)
+	}
+
+	if total <= maxContextChars {
+		return messages
+	}
+
+	// Keep: system (0), initial task (1), last 20 messages
+	keepTail := 20
+	if keepTail > len(messages)-2 {
+		keepTail = len(messages) - 2
+	}
+
+	head := messages[:2] // system + initial task
+	tail := messages[len(messages)-keepTail:]
+
+	compacted := make([]llm.Message, 0, len(head)+1+len(tail))
+	compacted = append(compacted, head...)
+	compacted = append(compacted, llm.Message{
+		Role:    llm.RoleUser,
+		Content: "[Earlier conversation messages were compacted to save context. Continue from the recent messages below.]",
+	})
+	compacted = append(compacted, tail...)
+	return compacted
+}
+
 func (a *Agent) execGitComment(ctx context.Context, args string) (string, error) {
 	var params struct {
 		Repo        string `json:"repo"`
@@ -464,6 +607,10 @@ func (a *Agent) execGitComment(ctx context.Context, args string) (string, error)
 	}
 
 	a.logger.Info("git_comment", "repo", params.Repo, "issue", params.IssueNumber)
+
+	// Scrub potential credentials before posting to a public comment
+	secrets := a.knownSecrets()
+	params.Body = scrubCredentials(params.Body, secrets)
 
 	// Use Gitea API if available, otherwise fall back to GitHub CLI
 	if a.gitea != nil {
@@ -568,6 +715,11 @@ func (a *Agent) execCreatePR(ctx context.Context, args string) (string, error) {
 	}
 
 	a.logger.Info("create_pr", "repo", params.Repo, "title", params.Title, "head", params.Head, "base", params.Base)
+
+	// Scrub credentials from PR title and body
+	secrets := a.knownSecrets()
+	params.Title = scrubCredentials(params.Title, secrets)
+	params.Body = scrubCredentials(params.Body, secrets)
 
 	if a.gitea != nil {
 		parts := strings.SplitN(params.Repo, "/", 2)

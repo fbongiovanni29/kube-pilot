@@ -12,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fbongiovanni29/kube-pilot/internal/agent"
 	"github.com/fbongiovanni29/kube-pilot/internal/config"
+	"github.com/fbongiovanni29/kube-pilot/internal/tools"
 )
 
 func testLogger() *slog.Logger {
@@ -248,5 +250,156 @@ func TestIsApprovalCaseInsensitive(t *testing.T) {
 		if !isApproval(body) {
 			t.Errorf("expected %q to be an approval (case insensitive)", body)
 		}
+	}
+}
+
+func TestDispatchInjectsIntoRunningAgent(t *testing.T) {
+	h := &WebhookHandler{
+		cfg:    &config.Config{Git: config.GitConfig{Provider: "gitea"}},
+		logger: testLogger(),
+		agents: make(map[issueKey]*agent.Agent),
+	}
+
+	key := issueKey{"org/repo", 1}
+
+	// Simulate a running agent by registering one
+	a := agent.New(nil, nil, nil, testLogger())
+	h.mu.Lock()
+	h.agents[key] = a
+	h.mu.Unlock()
+
+	// Dispatch while agent is active — should inject, not start a new one
+	h.dispatch(key, "new comment context", "org/repo")
+
+	// Verify no second agent was registered (still the same one)
+	h.mu.Lock()
+	if h.agents[key] != a {
+		t.Error("expected same agent instance, got a different one")
+	}
+	h.mu.Unlock()
+}
+
+func TestDispatchStartsNewAgent(t *testing.T) {
+	h := &WebhookHandler{
+		cfg:    &config.Config{Git: config.GitConfig{Provider: "gitea"}},
+		logger: testLogger(),
+		agents: make(map[issueKey]*agent.Agent),
+	}
+
+	key := issueKey{"org/repo", 1}
+
+	// No active agent — dispatch should not have an agent registered yet
+	h.mu.Lock()
+	_, exists := h.agents[key]
+	h.mu.Unlock()
+
+	if exists {
+		t.Error("expected no agent before dispatch")
+	}
+}
+
+func TestIsBotUserGitea(t *testing.T) {
+	h := &WebhookHandler{
+		cfg: &config.Config{
+			Git:   config.GitConfig{Provider: "gitea"},
+			Gitea: config.GiteaConfig{AdminUser: "kube-pilot-admin"},
+		},
+	}
+
+	if !h.isBotUser("kube-pilot-admin") {
+		t.Error("expected bot's own admin user to be detected")
+	}
+	if !h.isBotUser("Kube-Pilot-Admin") {
+		t.Error("expected case-insensitive match for bot user")
+	}
+	if h.isBotUser("some-human") {
+		t.Error("expected non-bot user to not match")
+	}
+	if h.isBotUser("") {
+		t.Error("expected empty username to not match")
+	}
+}
+
+func TestIsBotUserGitHub(t *testing.T) {
+	h := &WebhookHandler{
+		cfg: &config.Config{
+			Git: config.GitConfig{Provider: "github"},
+		},
+	}
+
+	if !h.isBotUser("kube-pilot[bot]") {
+		t.Error("expected kube-pilot[bot] to be detected")
+	}
+	if h.isBotUser("some-human") {
+		t.Error("expected non-bot user to not match")
+	}
+}
+
+func TestBotCommentIgnored(t *testing.T) {
+	h := &WebhookHandler{
+		cfg: &config.Config{
+			Git:   config.GitConfig{Provider: "gitea"},
+			Gitea: config.GiteaConfig{AdminUser: "kube-pilot-admin"},
+		},
+		logger: testLogger(),
+		agents: make(map[issueKey]*agent.Agent),
+	}
+
+	// Comment from the bot itself mentioning @kube-pilot
+	evt := issueCommentEvent{Action: "created"}
+	evt.Comment.Body = "@kube-pilot this is my summary"
+	evt.Comment.User.Username = "kube-pilot-admin"
+	evt.Issue.Number = 1
+	evt.Issue.Labels = []ghLabel{{Name: "kube-pilot"}}
+	evt.Repository.FullName = "org/repo"
+	body, _ := json.Marshal(evt)
+
+	req := httptest.NewRequest("POST", "/webhook", strings.NewReader(string(body)))
+	req.Header.Set("X-Gitea-Event", "issue_comment")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// Verify no agent was started
+	h.mu.Lock()
+	if len(h.agents) != 0 {
+		t.Error("expected no agent to be started for bot's own comment")
+	}
+	h.mu.Unlock()
+}
+
+func TestCommentOnFailure(t *testing.T) {
+	// Track whether the comment API was called
+	var commentPosted bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/comments") {
+			commentPosted = true
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(`{}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	gitea := tools.NewGiteaClient(srv.URL, "admin", "pass")
+
+	h := &WebhookHandler{
+		cfg: &config.Config{
+			Git: config.GitConfig{Provider: "gitea"},
+		},
+		logger: testLogger(),
+		gitea:  gitea,
+		agents: make(map[issueKey]*agent.Agent),
+	}
+
+	key := issueKey{"org/repo", 42}
+	h.commentOnFailure(key, "org/repo", "test failure message")
+
+	if !commentPosted {
+		t.Error("expected failure comment to be posted via Gitea API")
 	}
 }

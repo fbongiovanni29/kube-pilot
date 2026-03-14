@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 )
 
@@ -122,7 +123,64 @@ func TestChatWithToolCalls(t *testing.T) {
 }
 
 func TestChatAPIError(t *testing.T) {
+	// Non-retryable error (400)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(400)
+		w.Write([]byte(`{"error":{"message":"bad request"}}`))
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompat(OpenAICompatConfig{BaseURL: srv.URL, Model: "test"})
+	_, err := client.Chat(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, nil)
+	if err == nil {
+		t.Fatal("expected error on 400")
+	}
+}
+
+func TestChatRetryOn429(t *testing.T) {
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&attempts, 1)
+		if n <= 2 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(429)
+			w.Write([]byte(`{"error":{"message":"rate limited"}}`))
+			return
+		}
+		json.NewEncoder(w).Encode(chatResponse{
+			Choices: []struct {
+				Message struct {
+					Content   string     `json:"content"`
+					ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+				} `json:"message"`
+			}{
+				{Message: struct {
+					Content   string     `json:"content"`
+					ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+				}{Content: "recovered"}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompat(OpenAICompatConfig{BaseURL: srv.URL, Model: "test"})
+	resp, err := client.Chat(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, nil)
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got error: %v", err)
+	}
+	if resp.Content != "recovered" {
+		t.Errorf("Content = %q, want %q", resp.Content, "recovered")
+	}
+	if atomic.LoadInt32(&attempts) != 3 {
+		t.Errorf("attempts = %d, want 3", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestChatRetryExhausted(t *testing.T) {
+	var attempts int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.Header().Set("Retry-After", "0")
 		w.WriteHeader(429)
 		w.Write([]byte(`{"error":{"message":"rate limited"}}`))
 	}))
@@ -131,7 +189,26 @@ func TestChatAPIError(t *testing.T) {
 	client := NewOpenAICompat(OpenAICompatConfig{BaseURL: srv.URL, Model: "test"})
 	_, err := client.Chat(context.Background(), []Message{{Role: RoleUser, Content: "hi"}}, nil)
 	if err == nil {
-		t.Fatal("expected error on 429")
+		t.Fatal("expected error after exhausting retries")
+	}
+	// 1 initial + 3 retries = 4
+	if atomic.LoadInt32(&attempts) != 4 {
+		t.Errorf("attempts = %d, want 4", atomic.LoadInt32(&attempts))
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	if got := parseRetryAfter("5"); got != 5*1e9 {
+		t.Errorf("parseRetryAfter(5) = %v", got)
+	}
+	if got := parseRetryAfter("0"); got != 0 {
+		t.Errorf("parseRetryAfter(0) = %v, want 0", got)
+	}
+	if got := parseRetryAfter(""); got != -1 {
+		t.Errorf("parseRetryAfter('') = %v, want -1", got)
+	}
+	if got := parseRetryAfter("invalid"); got != -1 {
+		t.Errorf("parseRetryAfter('invalid') = %v, want -1", got)
 	}
 }
 

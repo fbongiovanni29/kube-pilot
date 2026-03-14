@@ -2,11 +2,12 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"log/slog"
-	"os"
 
 	kpctx "github.com/fbongiovanni29/kube-pilot/internal/context"
 	"github.com/fbongiovanni29/kube-pilot/internal/llm"
@@ -269,5 +270,238 @@ func TestToolDefsWithoutContextStore(t *testing.T) {
 	}
 	if names["read_context"] {
 		t.Error("expected toolDefs to NOT include 'read_context' without context store")
+	}
+}
+
+func TestAgentWorkDirIsolation(t *testing.T) {
+	a1 := New(&mockClient{}, nil, nil, testLogger())
+	a2 := New(&mockClient{}, nil, nil, testLogger())
+	defer a1.Cleanup()
+	defer a2.Cleanup()
+
+	if a1.workDir == "" {
+		t.Fatal("agent1 workDir is empty")
+	}
+	if a2.workDir == "" {
+		t.Fatal("agent2 workDir is empty")
+	}
+	if a1.workDir == a2.workDir {
+		t.Errorf("two agents got the same workDir: %s", a1.workDir)
+	}
+
+	// Verify both dirs exist
+	if _, err := os.Stat(a1.workDir); err != nil {
+		t.Errorf("agent1 workDir doesn't exist: %v", err)
+	}
+	if _, err := os.Stat(a2.workDir); err != nil {
+		t.Errorf("agent2 workDir doesn't exist: %v", err)
+	}
+
+	// Verify dirs have the kube-pilot-agent prefix
+	if !strings.Contains(filepath.Base(a1.workDir), "kube-pilot-agent") {
+		t.Errorf("workDir %q doesn't have expected prefix", a1.workDir)
+	}
+}
+
+func TestAgentCleanup(t *testing.T) {
+	a := New(&mockClient{}, nil, nil, testLogger())
+	dir := a.workDir
+	if dir == "" {
+		t.Fatal("workDir is empty")
+	}
+
+	a.Cleanup()
+
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Errorf("workDir %q still exists after Cleanup", dir)
+	}
+}
+
+func TestAgentExecUsesWorkDir(t *testing.T) {
+	client := &mockClient{
+		responses: []llm.Response{
+			{
+				Content: "Let me check.",
+				ToolCalls: []llm.ToolCall{
+					{
+						ID:   "call_1",
+						Type: "function",
+						Function: struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						}{
+							Name:      "exec",
+							Arguments: `{"command":"pwd"}`,
+						},
+					},
+				},
+			},
+			{Content: "Done."},
+		},
+	}
+
+	a := New(client, nil, nil, testLogger())
+	defer a.Cleanup()
+
+	result, err := a.Run(context.Background(), "print working dir")
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if result != "Done." {
+		t.Errorf("result = %q", result)
+	}
+	// The exec tool should have used the agent's workDir
+	// We can't easily check the pwd output from the mock, but we verify
+	// the agent was created with a valid workDir
+	if a.workDir == "" {
+		t.Error("expected agent to have a workDir set")
+	}
+}
+
+func TestScrubCredentials(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  string
+		secrets []string
+		want   string
+	}{
+		{
+			name:    "gitea password literal",
+			input:   "I cloned with password=mysecret123 from the repo",
+			secrets: []string{"mysecret123"},
+			want:    "I cloned with ***REDACTED*** from the repo",
+		},
+		{
+			name:    "bearer token",
+			input:   "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abc",
+			secrets: nil,
+			want:    "Authorization: ***REDACTED***",
+		},
+		{
+			name:    "github token",
+			input:   "Used token ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn to authenticate",
+			secrets: nil,
+			want:    "Used token ***REDACTED*** to authenticate",
+		},
+		{
+			name:    "password in key=value",
+			input:   "password=hunter2 in config",
+			secrets: nil,
+			want:    "***REDACTED*** in config",
+		},
+		{
+			name:    "no secrets in clean text",
+			input:   "Deployed successfully to production",
+			secrets: nil,
+			want:    "Deployed successfully to production",
+		},
+		{
+			name:    "short secret ignored",
+			input:   "abc",
+			secrets: []string{"ab"},
+			want:    "abc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := scrubCredentials(tt.input, tt.secrets)
+			if got != tt.want {
+				t.Errorf("scrubCredentials() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCompactMessagesUnderLimit(t *testing.T) {
+	messages := []llm.Message{
+		{Role: llm.RoleSystem, Content: "system prompt"},
+		{Role: llm.RoleUser, Content: "task"},
+		{Role: llm.RoleAssistant, Content: "response"},
+	}
+	result := compactMessages(messages)
+	if len(result) != 3 {
+		t.Errorf("expected 3 messages (no compaction), got %d", len(result))
+	}
+}
+
+func TestCompactMessagesOverLimit(t *testing.T) {
+	// Build a conversation that exceeds maxContextChars
+	messages := []llm.Message{
+		{Role: llm.RoleSystem, Content: "system prompt"},
+		{Role: llm.RoleUser, Content: "initial task"},
+	}
+
+	// Add enough messages to exceed the limit
+	bigContent := strings.Repeat("x", 20000)
+	for i := 0; i < 30; i++ {
+		messages = append(messages, llm.Message{
+			Role:    llm.RoleAssistant,
+			Content: bigContent,
+		})
+	}
+
+	result := compactMessages(messages)
+
+	// Should be compacted: 2 head + 1 compaction marker + 20 tail = 23
+	if len(result) != 23 {
+		t.Errorf("expected 23 messages after compaction, got %d", len(result))
+	}
+
+	// First two should be preserved
+	if result[0].Role != llm.RoleSystem {
+		t.Error("expected first message to be system")
+	}
+	if result[1].Role != llm.RoleUser {
+		t.Error("expected second message to be initial task")
+	}
+
+	// Third should be compaction marker
+	if !strings.Contains(result[2].Content, "compacted") {
+		t.Error("expected compaction marker message")
+	}
+}
+
+func TestKnownSecrets(t *testing.T) {
+	a := New(&mockClient{}, nil, &GiteaInfo{
+		URL:      "http://gitea.local",
+		User:     "admin",
+		Password: "super-secret-pass",
+	}, testLogger())
+	defer a.Cleanup()
+
+	secrets := a.knownSecrets()
+	found := false
+	for _, s := range secrets {
+		if s == "super-secret-pass" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected knownSecrets to include giteaInfo password")
+	}
+}
+
+func TestMessageSize(t *testing.T) {
+	m := llm.Message{
+		Role:    llm.RoleAssistant,
+		Content: "hello",
+		ToolCalls: []llm.ToolCall{
+			{
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{
+					Name:      "exec",
+					Arguments: `{"command":"ls"}`,
+				},
+			},
+		},
+	}
+
+	size := messageSize(m)
+	// "hello" (5) + "exec" (4) + arguments (16) = 25
+	if size != 25 {
+		t.Errorf("messageSize() = %d, want 25", size)
 	}
 }

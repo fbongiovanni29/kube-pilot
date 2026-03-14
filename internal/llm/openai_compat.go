@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -61,6 +62,8 @@ type chatResponse struct {
 	} `json:"error,omitempty"`
 }
 
+const maxRetries = 3
+
 func (c *OpenAICompatClient) Chat(ctx context.Context, messages []Message, tools []Tool) (*Response, error) {
 	reqBody := chatRequest{
 		Model:    c.model,
@@ -73,9 +76,45 @@ func (c *OpenAICompatClient) Chat(ctx context.Context, messages []Message, tools
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, respBody, err := c.doRequest(ctx, body)
+		if err != nil {
+			lastErr = err
+			if attempt < maxRetries {
+				if !c.backoff(ctx, attempt, -1) {
+					return nil, ctx.Err()
+				}
+			}
+			continue
+		}
+
+		// Rate limited (429) or server error (5xx) — retry with backoff
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+			if attempt < maxRetries {
+				retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+				if !c.backoff(ctx, attempt, retryAfter) {
+					return nil, ctx.Err()
+				}
+			}
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
+		}
+
+		return c.parseResponse(respBody)
+	}
+
+	return nil, fmt.Errorf("exhausted %d retries: %w", maxRetries, lastErr)
+}
+
+func (c *OpenAICompatClient) doRequest(ctx context.Context, body []byte) (*http.Response, []byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, nil, fmt.Errorf("create request: %w", err)
 	}
 
 	req.Header.Set("Content-Type", "application/json")
@@ -85,19 +124,19 @@ func (c *OpenAICompatClient) Chat(ctx context.Context, messages []Message, tools
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
+		return nil, nil, fmt.Errorf("send request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, nil, fmt.Errorf("read response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API error (status %d): %s", resp.StatusCode, string(respBody))
-	}
+	return resp, respBody, nil
+}
 
+func (c *OpenAICompatClient) parseResponse(respBody []byte) (*Response, error) {
 	var chatResp chatResponse
 	if err := json.Unmarshal(respBody, &chatResp); err != nil {
 		return nil, fmt.Errorf("unmarshal response: %w", err)
@@ -122,4 +161,32 @@ func (c *OpenAICompatClient) Chat(ctx context.Context, messages []Message, tools
 		Content:   choice.Message.Content,
 		ToolCalls: choice.Message.ToolCalls,
 	}, nil
+}
+
+// backoff waits before a retry. Uses retryAfter if >= 0, otherwise exponential backoff.
+// Returns false if context was cancelled.
+func (c *OpenAICompatClient) backoff(ctx context.Context, attempt int, retryAfter time.Duration) bool {
+	wait := retryAfter
+	if wait < 0 {
+		wait = time.Duration(attempt+1) * 5 * time.Second
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-time.After(wait):
+		return true
+	}
+}
+
+// parseRetryAfter parses the Retry-After header value (seconds).
+// Returns -1 if the header is missing or invalid.
+func parseRetryAfter(val string) time.Duration {
+	if val == "" {
+		return -1
+	}
+	secs, err := strconv.Atoi(val)
+	if err != nil {
+		return -1
+	}
+	return time.Duration(secs) * time.Second
 }

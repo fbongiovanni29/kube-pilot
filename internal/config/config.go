@@ -63,7 +63,8 @@ type ServerConfig struct {
 
 // ClusterConfig holds cluster-related settings.
 type ClusterConfig struct {
-	InfraRepo string `yaml:"infra_repo"` // Git repo for infra manifests
+	InfraRepo   string `yaml:"infra_repo"`   // Git repo for infra manifests
+	RegistryURL string `yaml:"registry_url"` // Container registry URL (e.g. "192.168.1.193:30300")
 }
 
 // Load reads config from a YAML file with env var expansion.

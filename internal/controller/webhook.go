@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 
 	"github.com/fbongiovanni29/kube-pilot/internal/agent"
 	"github.com/fbongiovanni29/kube-pilot/internal/config"
@@ -20,6 +21,12 @@ import (
 	"github.com/fbongiovanni29/kube-pilot/internal/tools"
 )
 
+// issueKey uniquely identifies an issue across repos.
+type issueKey struct {
+	repo        string
+	issueNumber int
+}
+
 // WebhookHandler handles webhook events from GitHub or Gitea.
 type WebhookHandler struct {
 	cfg          *config.Config
@@ -27,6 +34,11 @@ type WebhookHandler struct {
 	gitea        *tools.GiteaClient // nil when using github
 	contextStore *kpctx.Store       // nil when context is disabled
 	logger       *slog.Logger
+
+	// Per-issue concurrency control: one agent per issue, new messages
+	// are injected into the running agent's conversation mid-flight.
+	mu     sync.Mutex
+	agents map[issueKey]*agent.Agent // running agent per issue
 }
 
 // NewWebhookHandler creates a new webhook handler.
@@ -36,6 +48,7 @@ func NewWebhookHandler(cfg *config.Config, client llm.Client, gitea *tools.Gitea
 		client: client,
 		gitea:  gitea,
 		logger: logger,
+		agents: make(map[issueKey]*agent.Agent),
 	}
 
 	// Initialize context store if enabled
@@ -151,7 +164,8 @@ func (h *WebhookHandler) handleIssueEvent(body []byte) {
 	h.logger.Info("issue event", "action", evt.Action, "repo", evt.Repository.FullName, "issue", evt.Issue.Number, "labels", len(evt.Issue.Labels))
 
 	// GitHub sends "labeled", Gitea sends "label"
-	if evt.Action != "opened" && evt.Action != "labeled" && evt.Action != "label" {
+	// GitHub: "labeled", Gitea: "label" or "label_updated"
+	if evt.Action != "opened" && evt.Action != "labeled" && evt.Action != "label" && evt.Action != "label_updated" {
 		return
 	}
 
@@ -189,7 +203,7 @@ Body:
 		taskSuffix,
 	)
 
-	go h.runAgent(task, evt.Repository.FullName)
+	h.dispatch(issueKey{evt.Repository.FullName, evt.Issue.Number}, task, evt.Repository.FullName)
 }
 
 func (h *WebhookHandler) handleIssueCommentEvent(body []byte) {
@@ -210,6 +224,12 @@ func (h *WebhookHandler) handleIssueCommentEvent(body []byte) {
 	user := evt.Comment.User.Login
 	if user == "" {
 		user = evt.Comment.User.Username // Gitea fallback
+	}
+
+	// Ignore comments from the bot itself to prevent self-triggering loops
+	if h.isBotUser(user) {
+		h.logger.Debug("ignoring comment from bot user", "user", user)
+		return
 	}
 
 	// Phase 2: Check for plan-first approval
@@ -247,7 +267,7 @@ When done, comment on the issue with a summary and close it.`,
 			user, plan,
 		)
 
-		go h.runAgent(task, evt.Repository.FullName)
+		h.dispatch(issueKey{evt.Repository.FullName, evt.Issue.Number}, task, evt.Repository.FullName)
 		return
 	}
 
@@ -279,7 +299,7 @@ Respond to this comment. If it's a request, handle it. Comment on the issue with
 		user, evt.Comment.Body,
 	)
 
-	go h.runAgent(task, evt.Repository.FullName)
+	h.dispatch(issueKey{evt.Repository.FullName, evt.Issue.Number}, task, evt.Repository.FullName)
 }
 
 func (h *WebhookHandler) getIssueDetails(repoFullName string, issueNumber int) string {
@@ -304,7 +324,73 @@ func (h *WebhookHandler) providerName() string {
 	return "GitHub"
 }
 
-func (h *WebhookHandler) runAgent(task, repoFullName string) {
+// dispatch either starts a new agent or injects a message into an already-running
+// agent's conversation. This lets the agent adjust mid-flight instead of restarting.
+func (h *WebhookHandler) dispatch(key issueKey, task, repoFullName string) {
+	h.mu.Lock()
+	if a, ok := h.agents[key]; ok {
+		// Agent already running — inject the new context into its conversation
+		h.logger.Info("injecting into running agent",
+			"repo", key.repo, "issue", key.issueNumber)
+		h.mu.Unlock()
+		a.Inject(task)
+		return
+	}
+	h.mu.Unlock()
+
+	go h.runAgentTracked(key, task, repoFullName)
+}
+
+// runAgentTracked creates an agent, registers it for mid-flight injection,
+// runs it, and cleans up when done.
+func (h *WebhookHandler) runAgentTracked(key issueKey, task, repoFullName string) {
+	a := h.createAgent(repoFullName)
+	defer a.Cleanup() // Clean up temp working directory
+
+	// Register so dispatch can inject messages into this agent
+	h.mu.Lock()
+	h.agents[key] = a
+	h.mu.Unlock()
+
+	// Ensure we always unregister and notify on unexpected failure
+	defer func() {
+		h.mu.Lock()
+		delete(h.agents, key)
+		h.mu.Unlock()
+
+		if r := recover(); r != nil {
+			h.logger.Error("agent panicked", "error", r, "repo", key.repo, "issue", key.issueNumber)
+			h.commentOnFailure(key, repoFullName, fmt.Sprintf("Agent crashed unexpectedly: %v. Please re-open or re-trigger this issue.", r))
+		}
+	}()
+
+	result, err := a.Run(context.Background(), task)
+	if err != nil {
+		h.logger.Error("agent failed", "error", err, "repo", key.repo, "issue", key.issueNumber)
+		h.commentOnFailure(key, repoFullName, fmt.Sprintf("Agent encountered an error and could not complete: %s. Please re-trigger this issue.", err.Error()))
+	} else {
+		h.logger.Info("agent completed", "result", result)
+	}
+}
+
+// commentOnFailure posts a best-effort failure notice on an issue.
+func (h *WebhookHandler) commentOnFailure(key issueKey, repoFullName, message string) {
+	parts := strings.SplitN(repoFullName, "/", 2)
+	if len(parts) != 2 {
+		return
+	}
+
+	body := fmt.Sprintf("⚠️ **kube-pilot agent failure**\n\n%s", message)
+
+	if h.gitea != nil {
+		_ = h.gitea.Comment(context.Background(), parts[0], parts[1], key.issueNumber, body)
+		return
+	}
+	_ = tools.GitHubComment(context.Background(), repoFullName, key.issueNumber, body)
+}
+
+// createAgent builds a configured agent for a given repo.
+func (h *WebhookHandler) createAgent(repoFullName string) *agent.Agent {
 	var giteaInfo *agent.GiteaInfo
 	if h.cfg.Git.Provider == "gitea" {
 		giteaInfo = &agent.GiteaInfo{
@@ -314,21 +400,17 @@ func (h *WebhookHandler) runAgent(task, repoFullName string) {
 		}
 	}
 
-	// Build agent options
 	var opts []agent.Option
 
-	// Phase 1: Fetch AGENTS.md from the triggering repo
 	repoCtx := h.fetchAgentsFile(repoFullName)
 	if repoCtx != "" {
 		opts = append(opts, agent.WithRepoContext(repoCtx))
 		h.logger.Info("repo context loaded", "repo", repoFullName)
 	}
 
-	// Phase 3: Load cross-session context
 	if h.contextStore != nil {
 		projectCtx := h.loadProjectContext(repoFullName)
 
-		// Phase 4: Append initiative context for this repo
 		initiativeCtx := h.loadInitiativeContext(repoFullName)
 		if initiativeCtx != "" {
 			if projectCtx != "" {
@@ -345,13 +427,7 @@ func (h *WebhookHandler) runAgent(task, repoFullName string) {
 		opts = append(opts, agent.WithContextStore(h.contextStore))
 	}
 
-	a := agent.New(h.client, h.gitea, giteaInfo, h.logger, opts...)
-	result, err := a.Run(context.Background(), task)
-	if err != nil {
-		h.logger.Error("agent failed", "error", err)
-		return
-	}
-	h.logger.Info("agent completed", "result", result)
+	return agent.New(h.client, h.gitea, giteaInfo, h.logger, opts...)
 }
 
 // fetchAgentsFile reads the AGENTS.md (or configured agents_file) from a repo.
@@ -494,6 +570,20 @@ func (h *WebhookHandler) isWatchedRepo(repo string) bool {
 		}
 	}
 	return false
+}
+
+// isBotUser returns true if the given username matches the bot's own user,
+// preventing self-triggering loops when the agent comments on issues.
+func (h *WebhookHandler) isBotUser(username string) bool {
+	if username == "" {
+		return false
+	}
+	// For Gitea, the bot uses the configured admin user
+	if h.cfg.Git.Provider == "gitea" && h.cfg.Gitea.AdminUser != "" {
+		return strings.EqualFold(username, h.cfg.Gitea.AdminUser)
+	}
+	// For GitHub, the bot user is typically "kube-pilot[bot]" or configured app name
+	return strings.EqualFold(username, "kube-pilot[bot]")
 }
 
 func hasLabel(labels []ghLabel, name string) bool {

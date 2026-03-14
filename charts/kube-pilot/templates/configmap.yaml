@@ -40,6 +40,9 @@ data:
 
     cluster:
       infra_repo: {{ .Values.cluster.infraRepo }}
+      {{- if .Values.cluster.registryURL }}
+      registry_url: {{ .Values.cluster.registryURL }}
+      {{- end }}
 
     {{- if .Values.context.enabled }}
     context:
