@@ -15,10 +15,10 @@ kube-pilot:
   1. Creates the repo, writes main.go + Dockerfile
   2. Commits and pushes to Gitea
   3. Creates a Tekton TaskRun → Kaniko builds the image → pushes to registry
-  4. Writes Deployment + Service manifests → commits to infra repo
-  5. ArgoCD syncs → pods come up
+  4. Writes Deployment + Service + Ingress manifests → commits to infra repo
+  5. ArgoCD syncs → pods come up → ExternalDNS creates DNS → cert-manager issues TLS
   6. Curls the endpoint → 200 OK
-  7. Comments "Done. docs-api running at docs-api.default.svc:8080" → closes issue
+  7. Comments "Done. docs-api running at docs-api.apps.example.com" → closes issue
 ```
 
 ---
@@ -229,6 +229,39 @@ context:
   agents_file: AGENTS.md                # repo conventions file
 ```
 
+### Ingress, TLS & DNS
+
+Expose deployed services externally with automatic DNS and TLS:
+
+```yaml
+traefik:
+  enabled: true
+
+certManager:
+  enabled: true
+  acmeEmail: you@example.com
+
+externalDNS:
+  enabled: true
+  provider:
+    name: cloudflare      # or aws, google, azure, digitalocean
+  domainFilters:
+    - apps.example.com
+  # Credentials are loaded from the external-dns-credentials secret.
+  # If using Vault, store them at kube-pilot/dns:
+  #   vault kv put secret/kube-pilot/dns CF_API_TOKEN=xxx        (Cloudflare)
+  #   vault kv put secret/kube-pilot/dns AWS_ACCESS_KEY_ID=xxx AWS_SECRET_ACCESS_KEY=xxx  (Route53)
+
+ingress:
+  enabled: true
+  className: traefik
+  host: apps.example.com
+  tls: true
+  clusterIssuer: letsencrypt-prod
+```
+
+When ingress is enabled, kube-pilot automatically creates Ingress resources for deployed services with the pattern `<service-name>.<domain>`. cert-manager provisions TLS certificates via Let's Encrypt, and ExternalDNS creates DNS records — all automatically.
+
 ### Toggle components
 
 Everything is optional:
@@ -294,12 +327,17 @@ internal/
 - [x] Credential scrubbing
 - [x] Rate limit retry with backoff
 - [x] Failure recovery notifications
+- [x] GitHub App auth (comments as bot identity)
+- [x] GitHub webhook mode
+- [x] Vault + External Secrets for credential management
+- [x] Traefik ingress controller
+- [x] cert-manager (automatic TLS via Let's Encrypt)
+- [x] ExternalDNS (automatic DNS from Ingress resources)
 
 **Integrations:**
-- [ ] Slack* — receive tasks and post updates in channels
-- [ ] Jira* — pick up tickets, update status, link PRs
-- [ ] Alertmanager* — auto-create issues from firing alerts, kube-pilot investigates and fixes
-- [ ] GitHub webhook mode (currently Gitea-native, GitHub via polling)
+- [ ] Slack — receive tasks and post updates in channels
+- [ ] Jira — pick up tickets, update status, link PRs
+- [ ] Alertmanager — auto-create issues from firing alerts, kube-pilot investigates and fixes
 
 **Observability:**
 - [ ] Prometheus metrics — agent runs, step counts, success/failure rates
