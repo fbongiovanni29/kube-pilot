@@ -2,9 +2,11 @@
 
 # kube-pilot
 
+> **This is a proof of concept.** It works — we've deployed a full multi-service app from scratch on a single k3s node — but it's early. Expect rough edges.
+
 **An AI engineer that runs in your Kubernetes cluster with access to all your dev tools.**
 
-You talk to it the way you already work — file a GitHub issue, drop a message in Slack, update a Jira ticket. kube-pilot picks it up, writes the code, builds the container, deploys it, verifies it's running, and closes the ticket. If it crashes, it reads the logs, fixes the bug, and redeploys.
+You talk to it the way you already work — file a GitHub issue, and it picks it up, writes the code, builds the container, deploys it, verifies it's running, and closes the ticket. If it crashes, it reads the logs, fixes the bug, and redeploys. Slack and Jira integrations are coming*.
 
 ```
 You (GitHub issue): "Build a Go REST API for document storage. Deploy it to the cluster."
@@ -19,15 +21,13 @@ kube-pilot:
   7. Comments "Done. docs-api running at docs-api.default.svc:8080" → closes issue
 ```
 
-> **Status:** Proof of concept — tested with Gitea + Claude on a single k3s node. [See it deploy a full office suite from scratch.](#demo-clouddesk-office-suite)
-
 ---
 
 ## What makes this different
 
 AI coding tools generate code. Then you copy it, build it, deploy it, debug it, and iterate manually. The feedback loop is broken.
 
-kube-pilot closes the loop. It lives inside the cluster with direct access to every tool in your dev stack — git, CI/CD, container registry, deployment pipelines, kubectl, monitoring. You communicate with it through the tools you already use (GitHub, Slack, Jira), and it acts with all the tools in your cluster.
+kube-pilot closes the loop. It lives inside the cluster with direct access to every tool in your dev stack — git, CI/CD, container registry, deployment pipelines, kubectl, monitoring. You communicate with it through the tools you already use (GitHub, Slack*, Jira*), and it acts with all the tools in your cluster.
 
 | AI coding tools | kube-pilot |
 |----------------|------------|
@@ -46,7 +46,7 @@ It's not an ops bot. It's not a chatbot with kubectl access. It's an autonomous 
 
 ```
   Issue opened             kube-pilot                     Cluster
-  (GitHub/Gitea/Slack)     (AI agent)
+  (GitHub/Gitea/Slack*)    (AI agent)
        │                       │
        │    webhook            │
        ├──────────────────────►│
@@ -69,6 +69,8 @@ It's not an ops bot. It's not a chatbot with kubectl access. It's an autonomous 
        │   "Done" + close      │◄────────┘
        │◄──────────────────────│
 ```
+
+Triggers can also come from **Alertmanager** — a firing alert (e.g. pod crash loop, high error rate) becomes an issue that kube-pilot investigates and fixes autonomously.
 
 ### The agent loop
 
@@ -161,7 +163,7 @@ Watch the issue. kube-pilot picks it up, does the work, and closes it when done.
 
 ## Demo: CloudDesk office suite
 
-The [`demo/`](demo/) directory contains a complete multi-service office productivity suite called **CloudDesk** — four microservices that kube-pilot can build and deploy from scratch, entirely from Git issues.
+We built **CloudDesk** — a multi-service office productivity suite — to demonstrate kube-pilot deploying and managing a real application across multiple repos. The source code and sample issues are in the [`demo/`](demo/) directory.
 
 | Service | What it does |
 |---------|-------------|
@@ -170,14 +172,7 @@ The [`demo/`](demo/) directory contains a complete multi-service office producti
 | **notifications-worker** | Background job processor — webhook notifications |
 | **web-gateway** | API gateway — routes traffic to backend services |
 
-### Try it
-
-1. Install kube-pilot (see [Quick start](#quick-start))
-2. Create the repos in Gitea (one per service)
-3. Push the code from `demo/repos/` to each repo
-4. File the sample issues from `demo/issues/` — progressively more complex
-
-The sample issues take kube-pilot from "deploy a single service" to "add rate limiting across the gateway" to "fix a crashing endpoint" to "add health monitoring to everything." Each one is a real task that the agent handles end-to-end.
+The [`demo/issues/`](demo/issues/) directory has five sample issues that progressively demonstrate what kube-pilot can do — from deploying a service from scratch, to adding rate limiting, to debugging a crashing endpoint, to coordinating changes across all four services.
 
 See [`demo/README.md`](demo/README.md) for the full walkthrough.
 
@@ -284,8 +279,9 @@ internal/
 - [x] Failure recovery notifications
 
 **Integrations:**
-- [ ] Slack — receive tasks and post updates in channels
-- [ ] Jira — pick up tickets, update status, link PRs
+- [ ] Slack* — receive tasks and post updates in channels
+- [ ] Jira* — pick up tickets, update status, link PRs
+- [ ] Alertmanager — auto-create issues from firing alerts, kube-pilot investigates and fixes
 - [ ] GitHub webhook mode (currently Gitea-native, GitHub via polling)
 
 **Observability:**
@@ -297,6 +293,8 @@ internal/
 - [ ] Multi-environment hub & spoke — central kube-pilot managing dev/staging/prod clusters via Crossplane
 - [ ] Web UI for task history and observability
 - [ ] Self-management (kube-pilot upgrades itself via ArgoCD)
+
+*\* Planned — not yet implemented*
 
 ---
 
