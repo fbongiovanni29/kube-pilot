@@ -45,3 +45,13 @@ dependencies:
     version: 1.20.0
     repository: https://kubernetes-sigs.github.io/external-dns
     condition: externalDNS.enabled
+
+  - name: kube-prometheus-stack
+    version: 72.6.2
+    repository: https://prometheus-community.github.io/helm-charts
+    condition: kubePrometheusStack.enabled
+
+  - name: loki
+    version: 6.29.0
+    repository: https://grafana.github.io/helm-charts
+    condition: loki.enabled

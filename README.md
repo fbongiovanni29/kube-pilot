@@ -6,7 +6,7 @@
 
 **A headless AI engineer that runs in your Kubernetes cluster with access to all your dev tools.**
 
-There's no UI. You talk to it the way you already work — file a GitHub issue, and it picks it up, writes the code, builds the container, deploys it, verifies it's running, and closes the ticket. If it crashes, it reads the logs, fixes the bug, and redeploys. Slack and Jira integrations are coming*.
+There's no UI. You talk to it the way you already work — file a GitHub issue, and it picks it up, writes the code, builds the container, deploys it, verifies it's running, and closes the ticket. If it crashes, it reads the logs, fixes the bug, and redeploys. When an alert fires at 3am, it wakes up, queries the metrics, reads the logs, and fixes the problem before you check your phone.
 
 ```
 You (GitHub issue): "Build a Go REST API for document storage. Deploy it to the cluster."
@@ -21,22 +21,35 @@ kube-pilot:
   7. Comments "Done. docs-api running at docs-api.apps.example.com" → closes issue
 ```
 
+```
+Alertmanager fires: "HighPodRestarts — pod hello-world restarting frequently"
+
+kube-pilot:
+  1. Checks pod status with kubectl
+  2. Queries Loki logs for errors (logcli '{namespace="default"} |= "error"')
+  3. Queries Prometheus for restart count, CPU, memory metrics
+  4. Reads events, describes the pod, checks for OOMKills
+  5. Identifies root cause → fixes the code or config → redeploys
+  6. Verifies the alert resolves
+```
+
 ---
 
 ## What makes this different
 
 AI coding tools generate code. Then you copy it, build it, deploy it, debug it, and iterate manually. The feedback loop is broken.
 
-kube-pilot closes the loop. It lives inside the cluster with direct access to every tool in your dev stack — git, CI/CD, container registry, deployment pipelines, kubectl, monitoring. You communicate with it through the tools you already use (GitHub, Slack*, Jira*), and it acts with all the tools in your cluster.
+kube-pilot closes the loop. It lives inside the cluster with direct access to every tool in your dev stack — git, CI/CD, container registry, deployment pipelines, kubectl, Prometheus, Grafana, Loki. You communicate with it through the tools you already use (GitHub, Slack*, Jira*), and it acts with all the tools in your cluster.
 
 | AI coding tools | kube-pilot |
 |----------------|------------|
 | Generates code | Generates code |
 | You build it | Builds it (Tekton + Kaniko) |
 | You deploy it | Deploys it (git push + ArgoCD) |
-| You debug it | Reads logs, fixes, redeploys |
-| You verify it | Curls endpoints, checks health |
+| You debug it | Queries Prometheus + Loki, reads logs, fixes, redeploys |
+| You verify it | Curls endpoints, checks metrics, verifies alerts clear |
 | You close the ticket | Closes the ticket |
+| You wake up at 3am | Alertmanager wakes *it* up — it investigates and fixes autonomously |
 
 It's not an ops bot. It's not a chatbot with kubectl access. It's an autonomous software engineer that happens to live inside your cluster.
 
@@ -78,7 +91,7 @@ kube-pilot doesn't bolt AI onto an existing workflow. It uses the cluster itself
        │◄──────────────────────│
 ```
 
-Triggers can also come from **Alertmanager*** — a firing alert (e.g. pod crash loop, high error rate) becomes an issue that kube-pilot investigates and fixes autonomously.
+Triggers can also come from **Alertmanager** — a firing alert (e.g. pod crash loop, high error rate) becomes a task that kube-pilot investigates autonomously. It queries Prometheus metrics, searches Loki logs, checks pod state, identifies the root cause, and fixes it — or escalates if it can't.
 
 ### The agent loop
 
@@ -99,6 +112,10 @@ One `helm install` gives you:
 | **Traefik** | Ingress controller — routes external traffic to services (optional) |
 | **cert-manager** | Automatic TLS certificates via Let's Encrypt (optional) |
 | **ExternalDNS** | Automatic DNS records from Ingress resources (optional) |
+| **Prometheus** | Metrics collection — agent can query PromQL (optional) |
+| **Grafana** | Dashboards — agent can create/manage via API (optional) |
+| **Loki** | Log aggregation — agent can query via logcli (optional) |
+| **Alertmanager** | Alert routing — firing alerts become agent tasks (optional) |
 
 Everything runs in-cluster. No public URLs. No SaaS accounts. No Docker Hub.
 
@@ -125,6 +142,16 @@ kube-pilot remembers what it learns. If it discovers that a repo needs a specifi
 
 ### Mid-flight context injection
 If a second comment arrives while the agent is working, it gets injected into the running conversation — the agent adjusts its approach without restarting.
+
+### Alert-driven automation
+When Alertmanager fires an alert labeled `kube-pilot: "true"`, kube-pilot receives a webhook and autonomously investigates. It queries Prometheus for metrics, searches Loki for error logs, checks pod state with kubectl, and attempts to fix the issue — all without human intervention. Add the label to any PrometheusRule to opt in.
+
+### Observability-aware debugging
+kube-pilot has native access to your monitoring stack. When investigating any issue — whether from a GitHub issue or a firing alert — it can:
+- Query **Prometheus** via PromQL for CPU, memory, error rates, and custom metrics
+- Search **Loki** logs with `logcli` for errors, stack traces, and patterns
+- Check **Alertmanager** for active alerts and manage silences with `amtool`
+- Create and update **Grafana** dashboards via the API
 
 ### Credential scrubbing
 Before posting any comment or PR, kube-pilot scrubs known secrets and common credential patterns. Passwords, tokens, and API keys are redacted before they reach the LLM or any public output.
@@ -154,7 +181,7 @@ helm install kube-pilot ./charts/kube-pilot \
   --set gitea.gitea.admin.password="your-password"
 ```
 
-kube-pilot bootstraps itself: creates git repos, registers webhooks, and starts listening. No manual setup.
+kube-pilot bootstraps itself: creates git repos, registers webhooks, provisions Grafana API keys, and starts listening. No manual setup.
 
 ### Give it a task
 
@@ -262,6 +289,37 @@ ingress:
 
 When ingress is enabled, kube-pilot automatically creates Ingress resources for deployed services with the pattern `<service-name>.<domain>`. cert-manager provisions TLS certificates via Let's Encrypt, and ExternalDNS creates DNS records — all automatically.
 
+### Observability
+
+Add Prometheus, Grafana, Loki, and Alertmanager for metrics, dashboards, logs, and alert-driven automation:
+
+```yaml
+kubePrometheusStack:
+  enabled: true
+
+loki:
+  enabled: true
+
+observability:
+  enabled: true
+  # URLs are auto-detected from subcharts. Override to use external services:
+  # prometheus:
+  #   url: http://my-prometheus:9090
+  # grafana:
+  #   url: http://my-grafana:3000
+  #   apiKey: ${GRAFANA_API_KEY}
+  # loki:
+  #   url: http://my-loki:3100
+  # alertmanager:
+  #   url: http://my-alertmanager:9093
+```
+
+When observability is enabled:
+- The agent can query **Prometheus** (PromQL via curl) and create **PrometheusRule** CRs for new alert rules
+- The agent can search **Loki** logs using `logcli`
+- The agent can manage **Grafana** dashboards via the API
+- **Alertmanager** alerts labeled `kube-pilot: "true"` are routed to the agent's `/alertmanager-webhook` endpoint — firing alerts become autonomous investigation tasks
+
 ### Toggle components
 
 Everything is optional:
@@ -283,6 +341,10 @@ certManager:
   enabled: false       # Automatic TLS certificates
 externalDNS:
   enabled: false       # Automatic DNS from Ingress resources
+kubePrometheusStack:
+  enabled: false       # Prometheus + Grafana + Alertmanager
+loki:
+  enabled: false       # Log aggregation
 ```
 
 ---
@@ -313,7 +375,7 @@ internal/
 └── tools/          # Gitea client, GitHub client, shell executor
 ```
 
-**83 unit tests** across all packages. Every feature is tested.
+**109 unit tests** across all packages. Every feature is tested.
 
 ---
 
@@ -337,12 +399,13 @@ internal/
 **Integrations:**
 - [ ] Slack — receive tasks and post updates in channels
 - [ ] Jira — pick up tickets, update status, link PRs
-- [ ] Alertmanager — auto-create issues from firing alerts, kube-pilot investigates and fixes
+- [x] Alertmanager — firing alerts become agent tasks, kube-pilot investigates and fixes
 
 **Observability:**
-- [ ] Prometheus metrics — agent runs, step counts, success/failure rates
-- [ ] Grafana dashboards — task throughput, LLM latency, build times
-- [ ] Loki log aggregation — structured agent logs with trace IDs
+- [x] Prometheus — agent queries PromQL for metrics, creates PrometheusRule CRs for alerts
+- [x] Grafana — agent creates/manages dashboards via API
+- [x] Loki — agent queries logs via logcli
+- [ ] Agent-internal metrics — step counts, success/failure rates, LLM latency
 
 **Infrastructure:**
 - [ ] Multi-environment hub & spoke — central kube-pilot managing dev/staging/prod clusters via Crossplane

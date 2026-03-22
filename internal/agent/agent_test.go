@@ -10,6 +10,7 @@ import (
 	"log/slog"
 
 	kpctx "github.com/fbongiovanni29/kube-pilot/internal/context"
+	"github.com/fbongiovanni29/kube-pilot/internal/config"
 	"github.com/fbongiovanni29/kube-pilot/internal/llm"
 	"github.com/fbongiovanni29/kube-pilot/internal/tools"
 )
@@ -479,6 +480,82 @@ func TestKnownSecrets(t *testing.T) {
 	}
 	if !found {
 		t.Error("expected knownSecrets to include giteaInfo password")
+	}
+}
+
+func TestSystemPromptWithObservability(t *testing.T) {
+	obsCfg := &config.ObservabilityConfig{
+		Enabled:      true,
+		Prometheus:   config.PrometheusEndpoint{URL: "http://prometheus:9090"},
+		Grafana:      config.GrafanaEndpoint{URL: "http://grafana:3000", APIKey: "gf-key"},
+		Loki:         config.LokiEndpoint{URL: "http://loki:3100"},
+		Alertmanager: config.AlertmanagerEndpoint{URL: "http://alertmanager:9093"},
+	}
+
+	a := New(&mockClient{}, nil, nil, testLogger(), WithObservabilityConfig(obsCfg))
+	prompt := a.systemPrompt()
+
+	if !strings.Contains(prompt, "## Observability") {
+		t.Error("expected system prompt to contain '## Observability'")
+	}
+	if !strings.Contains(prompt, "http://prometheus:9090") {
+		t.Error("expected system prompt to contain Prometheus URL")
+	}
+	if !strings.Contains(prompt, "logcli") {
+		t.Error("expected system prompt to contain logcli reference")
+	}
+	if !strings.Contains(prompt, "amtool") {
+		t.Error("expected system prompt to contain amtool reference")
+	}
+	if !strings.Contains(prompt, "http://grafana:3000") {
+		t.Error("expected system prompt to contain Grafana URL")
+	}
+	if !strings.Contains(prompt, "GRAFANA_API_KEY") {
+		t.Error("expected system prompt to reference GRAFANA_API_KEY")
+	}
+}
+
+func TestSystemPromptWithoutObservability(t *testing.T) {
+	a := New(&mockClient{}, nil, nil, testLogger())
+	prompt := a.systemPrompt()
+
+	if strings.Contains(prompt, "## Observability") {
+		t.Error("expected system prompt to NOT contain '## Observability' without config")
+	}
+}
+
+func TestSystemPromptObservabilityDisabled(t *testing.T) {
+	obsCfg := &config.ObservabilityConfig{
+		Enabled:    false,
+		Prometheus: config.PrometheusEndpoint{URL: "http://prometheus:9090"},
+	}
+
+	a := New(&mockClient{}, nil, nil, testLogger(), WithObservabilityConfig(obsCfg))
+	prompt := a.systemPrompt()
+
+	if strings.Contains(prompt, "## Observability") {
+		t.Error("expected system prompt to NOT contain '## Observability' when disabled")
+	}
+}
+
+func TestSystemPromptObservabilityPartial(t *testing.T) {
+	// Only Prometheus configured — should only show Prometheus section
+	obsCfg := &config.ObservabilityConfig{
+		Enabled:    true,
+		Prometheus: config.PrometheusEndpoint{URL: "http://prometheus:9090"},
+	}
+
+	a := New(&mockClient{}, nil, nil, testLogger(), WithObservabilityConfig(obsCfg))
+	prompt := a.systemPrompt()
+
+	if !strings.Contains(prompt, "### Prometheus") {
+		t.Error("expected system prompt to contain Prometheus section")
+	}
+	if strings.Contains(prompt, "### Loki") {
+		t.Error("expected system prompt to NOT contain Loki section when URL is empty")
+	}
+	if strings.Contains(prompt, "### Grafana") {
+		t.Error("expected system prompt to NOT contain Grafana section when URL is empty")
 	}
 }
 

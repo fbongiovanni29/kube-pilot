@@ -1,0 +1,22 @@
+{{- if and .Values.kubePrometheusStack.enabled .Values.observability.enabled }}
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-alerts
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+spec:
+  route:
+    receiver: kube-pilot-webhook
+    matchers:
+      - name: kube-pilot
+        value: "true"
+        matchType: "="
+    continue: false
+  receivers:
+    - name: kube-pilot-webhook
+      webhookConfigs:
+        - url: http://{{ include "kube-pilot.fullname" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}/alertmanager-webhook
+          sendResolved: false
+{{- end }}

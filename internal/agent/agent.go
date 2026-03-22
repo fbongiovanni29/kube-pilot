@@ -43,7 +43,7 @@ GitHub (source code hosting):
 `
 
 const systemPromptSuffix = `
-Available CLI tools: kubectl, helm, git, curl, gh, argocd (via kubectl), and any standard CLI tool.
+Available CLI tools: kubectl, helm, git, curl, gh, argocd (via kubectl), logcli, amtool, and any standard CLI tool.
 
 ## Build & Deploy
 
@@ -98,8 +98,9 @@ type Agent struct {
 	repoContext    string // content from AGENTS.md
 	projectContext string // cross-session insights from context store
 	contextStore   *kpctx.Store
-	ingressConfig  *config.IngressConfig
-	inbox          chan string // mid-flight messages injected between steps
+	ingressConfig       *config.IngressConfig
+	observabilityConfig *config.ObservabilityConfig
+	inbox               chan string // mid-flight messages injected between steps
 	workDir        string     // unique temp directory for this agent's shell commands
 }
 
@@ -158,6 +159,11 @@ func WithIngressConfig(cfg *config.IngressConfig) Option {
 	return func(a *Agent) { a.ingressConfig = cfg }
 }
 
+// WithObservabilityConfig tells the agent how to query metrics, logs, and alerts.
+func WithObservabilityConfig(cfg *config.ObservabilityConfig) Option {
+	return func(a *Agent) { a.observabilityConfig = cfg }
+}
+
 // knownSecrets returns secret values that should be scrubbed from public output.
 func (a *Agent) knownSecrets() []string {
 	var secrets []string
@@ -165,7 +171,7 @@ func (a *Agent) knownSecrets() []string {
 		secrets = append(secrets, a.giteaInfo.Password)
 	}
 	// Also check environment for any leaked values
-	for _, env := range []string{"GITEA_PASSWORD", "GITHUB_TOKEN", "GH_TOKEN", "API_KEY", "LLM_API_KEY"} {
+	for _, env := range []string{"GITEA_PASSWORD", "GITHUB_TOKEN", "GH_TOKEN", "API_KEY", "LLM_API_KEY", "GRAFANA_API_KEY"} {
 		if v := os.Getenv(env); v != "" {
 			secrets = append(secrets, v)
 		}
@@ -215,6 +221,165 @@ Services should be exposed externally via Ingress resources. When deploying a se
 `, a.ingressConfig.ClusterIssuer)
 		}
 	}
+	if a.observabilityConfig != nil && a.observabilityConfig.Enabled {
+		prompt += `
+## Observability
+
+The cluster has monitoring and logging infrastructure. Use these tools proactively:
+- When **investigating failures**: check Loki logs first (fastest signal), then Prometheus metrics for broader patterns
+- When **deploying a service**: verify it's emitting metrics and logs after deploy
+- When **debugging performance**: query Prometheus for CPU, memory, and request latency
+- When **creating alerts**: write PrometheusRule CRs (committed through git like everything else)
+`
+
+		if a.observabilityConfig.Prometheus.URL != "" {
+			prompt += fmt.Sprintf(`
+### Prometheus (metrics)
+Endpoint: %s
+
+Instant query (current value):
+  curl -s '%s/api/v1/query' --data-urlencode 'query=up{namespace="default"}'
+
+Range query (over time):
+  curl -s '%s/api/v1/query_range' --data-urlencode 'query=rate(http_requests_total[5m])' --data-urlencode 'start=2024-01-01T00:00:00Z' --data-urlencode 'end=2024-01-01T01:00:00Z' --data-urlencode 'step=60s'
+
+Useful PromQL patterns:
+- Pod CPU usage: sum(rate(container_cpu_usage_seconds_total{namespace="<ns>",pod=~"<app>.*"}[5m])) by (pod)
+- Pod memory: container_memory_working_set_bytes{namespace="<ns>",pod=~"<app>.*"}
+- Pod restarts: kube_pod_container_status_restarts_total{namespace="<ns>"}
+- HTTP request rate: sum(rate(http_requests_total{namespace="<ns>"}[5m])) by (service)
+- HTTP error rate: sum(rate(http_requests_total{code=~"5.."}[5m])) / sum(rate(http_requests_total[5m]))
+- Available targets: curl -s '%s/api/v1/targets' | jq '.data.activeTargets[] | {job: .labels.job, health: .health}'
+
+Creating alert rules — commit a PrometheusRule CR to the infra repo:
+  apiVersion: monitoring.coreos.com/v1
+  kind: PrometheusRule
+  metadata:
+    name: <app>-alerts
+    labels:
+      release: kube-pilot   # must match Prometheus label selector
+  spec:
+    groups:
+    - name: <app>.rules
+      rules:
+      - alert: HighErrorRate
+        expr: sum(rate(http_requests_total{code=~"5..",namespace="<ns>"}[5m])) / sum(rate(http_requests_total{namespace="<ns>"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          kube-pilot: "true"   # add this label to route alerts to kube-pilot for auto-investigation
+        annotations:
+          summary: "High error rate in <app>"
+          description: "Error rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+`, a.observabilityConfig.Prometheus.URL, a.observabilityConfig.Prometheus.URL, a.observabilityConfig.Prometheus.URL, a.observabilityConfig.Prometheus.URL)
+		}
+
+		if a.observabilityConfig.Loki.URL != "" {
+			prompt += fmt.Sprintf(`
+### Loki (logs)
+Endpoint: %s
+
+Query recent logs:
+  logcli --addr=%s query '{namespace="<ns>",pod=~"<app>.*"}' --limit=100 --since=1h
+
+Search for errors:
+  logcli --addr=%s query '{namespace="<ns>"} |= "error"' --limit=50 --since=1h
+
+Query with time range:
+  logcli --addr=%s query '{namespace="<ns>"}' --from="2024-01-01T00:00:00Z" --to="2024-01-01T01:00:00Z"
+
+Tail live logs:
+  logcli --addr=%s query '{namespace="<ns>"}' --tail
+
+Parse JSON logs and filter:
+  logcli --addr=%s query '{namespace="<ns>"} | json | level="error"' --limit=50
+
+Discover available labels:
+  logcli --addr=%s labels
+  logcli --addr=%s labels namespace
+
+LogQL tips:
+- Stream selectors: {namespace="default", container="app"}
+- Line filter: |= "error"  (contains), != "debug"  (excludes), |~ "err|warn"  (regex)
+- JSON parsing: | json | status_code >= 500
+- Log volume: sum(count_over_time({namespace="<ns>"}[5m])) by (pod)
+`, a.observabilityConfig.Loki.URL, a.observabilityConfig.Loki.URL, a.observabilityConfig.Loki.URL, a.observabilityConfig.Loki.URL, a.observabilityConfig.Loki.URL, a.observabilityConfig.Loki.URL, a.observabilityConfig.Loki.URL, a.observabilityConfig.Loki.URL)
+		}
+
+		if a.observabilityConfig.Alertmanager.URL != "" {
+			prompt += fmt.Sprintf(`
+### Alertmanager (alerts)
+Endpoint: %s
+
+List all active alerts:
+  amtool --alertmanager.url=%s alert
+
+List alerts filtered by label:
+  amtool --alertmanager.url=%s alert query alertname=HighErrorRate
+
+Silence an alert (suppress notifications while investigating):
+  amtool --alertmanager.url=%s silence add alertname=<name> --duration=1h --comment="investigating — kube-pilot"
+
+List active silences:
+  amtool --alertmanager.url=%s silence query
+
+Remove a silence:
+  amtool --alertmanager.url=%s silence expire <silence-id>
+
+Check alert routing (debug which receiver an alert matches):
+  amtool --alertmanager.url=%s config routes test alertname=HighErrorRate severity=critical
+`, a.observabilityConfig.Alertmanager.URL, a.observabilityConfig.Alertmanager.URL, a.observabilityConfig.Alertmanager.URL, a.observabilityConfig.Alertmanager.URL, a.observabilityConfig.Alertmanager.URL, a.observabilityConfig.Alertmanager.URL, a.observabilityConfig.Alertmanager.URL)
+		}
+
+		if a.observabilityConfig.Grafana.URL != "" {
+			prompt += fmt.Sprintf(`
+### Grafana (dashboards)
+Endpoint: %s
+
+Discover datasources (need UIDs for dashboard panels):
+  curl -s -H 'Authorization: Bearer $GRAFANA_API_KEY' %s/api/datasources | jq '.[] | {name, type, uid}'
+
+List existing dashboards:
+  curl -s -H 'Authorization: Bearer $GRAFANA_API_KEY' %s/api/search | jq '.[] | {title, uid, url}'
+
+Get a dashboard by UID:
+  curl -s -H 'Authorization: Bearer $GRAFANA_API_KEY' %s/api/dashboards/uid/<uid>
+
+Create or update a dashboard:
+  curl -s -X POST -H 'Authorization: Bearer $GRAFANA_API_KEY' -H 'Content-Type: application/json' \
+    %s/api/dashboards/db -d '{
+      "dashboard": {
+        "title": "My App Overview",
+        "panels": [
+          {
+            "title": "Request Rate",
+            "type": "timeseries",
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+            "datasource": {"type": "prometheus", "uid": "<prometheus-datasource-uid>"},
+            "targets": [{"expr": "sum(rate(http_requests_total{namespace=\"default\"}[5m]))", "legendFormat": "{{pod}}"}]
+          },
+          {
+            "title": "Error Rate",
+            "type": "stat",
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+            "datasource": {"type": "prometheus", "uid": "<prometheus-datasource-uid>"},
+            "targets": [{"expr": "sum(rate(http_requests_total{code=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))"}],
+            "fieldConfig": {"defaults": {"unit": "percentunit", "thresholds": {"steps": [{"value": 0, "color": "green"}, {"value": 0.01, "color": "yellow"}, {"value": 0.05, "color": "red"}]}}}
+          }
+        ]
+      },
+      "overwrite": true
+    }'
+
+Dashboard tips:
+- Always look up the Prometheus datasource UID first (it's NOT "prometheus" — it's a generated UID)
+- Panel types: timeseries (graphs), stat (single number), table, gauge, logs (for Loki)
+- For Loki panels, use datasource type "loki" and targets with LogQL queries
+- NEVER print, echo, or expose $GRAFANA_API_KEY in any output
+`, a.observabilityConfig.Grafana.URL, a.observabilityConfig.Grafana.URL, a.observabilityConfig.Grafana.URL, a.observabilityConfig.Grafana.URL, a.observabilityConfig.Grafana.URL)
+		}
+	}
+
 	prompt += systemPromptSuffix
 	if a.contextStore != nil {
 		prompt += "\n\nBefore closing an issue, save any insights about this repo's patterns, conventions, or failure modes using save_insight."

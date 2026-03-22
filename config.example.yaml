@@ -31,3 +31,17 @@ context:
   repo: kube-pilot/kube-pilot-context
   # File to read from repos for agent instructions (default: AGENTS.md)
   agents_file: AGENTS.md
+
+# Observability — metrics, logs, dashboards, alerts (optional)
+# Enable via Helm (kubePrometheusStack.enabled + loki.enabled) or point at existing services.
+observability:
+  enabled: false
+  prometheus:
+    url: http://kube-pilot-kube-prometheus-stack-prometheus.kube-pilot.svc:9090
+  grafana:
+    url: http://kube-pilot-kube-prometheus-stack-grafana.kube-pilot.svc:80
+    api_key: ${GRAFANA_API_KEY}
+  loki:
+    url: http://kube-pilot-loki.kube-pilot.svc:3100
+  alertmanager:
+    url: http://kube-pilot-kube-prometheus-stack-alertmanager.kube-pilot.svc:9093

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/fbongiovanni29/kube-pilot/internal/config"
 	"github.com/fbongiovanni29/kube-pilot/internal/tools"
@@ -38,6 +39,17 @@ func Run(ctx context.Context, cfg *config.Config, gitea *tools.GiteaClient, logg
 
 	// 5. Ensure Gitea registry auth secret for Tekton/Kaniko
 	ensureRegistryAuthSecret(ctx, cfg, logger)
+
+	// 6. Ensure Grafana API key for observability
+	if cfg.Observability.Enabled && cfg.Observability.Grafana.URL != "" {
+		if ensureGrafanaAPIKey(ctx, cfg, logger) {
+			// Key was just created — restart the deployment so the pod picks it up via envFrom.
+			// On the next startup, the key already exists so this is a one-time operation.
+			logger.Info("bootstrap: restarting deployment to pick up new grafana API key")
+			restartCmd := `kubectl rollout restart deployment/kube-pilot-kube-pilot -n kube-pilot`
+			tools.Shell(ctx, restartCmd)
+		}
+	}
 
 	logger.Info("bootstrap: complete")
 }
@@ -186,6 +198,139 @@ ENDOFYAML`, ns, ns, encodedConfig)
 		}
 		logger.Info("bootstrap: registry auth secret ready", "namespace", ns)
 	}
+}
+
+// ensureGrafanaAPIKey creates a Grafana service account and API token, stores it
+// in Vault and the bootstrap k8s secret. Returns true if a new key was created
+// (caller should restart the deployment to pick it up via envFrom).
+func ensureGrafanaAPIKey(ctx context.Context, cfg *config.Config, logger *slog.Logger) bool {
+	grafanaURL := cfg.Observability.Grafana.URL
+
+	// Step 0: Wait for Grafana to be ready (up to 2 minutes)
+	ready := false
+	healthCmd := fmt.Sprintf(`curl -sf %s/api/health -o /dev/null 2>/dev/null`, grafanaURL)
+	for i := 0; i < 24; i++ {
+		result, _ := tools.Shell(ctx, healthCmd)
+		if result != nil && result.ExitCode == 0 {
+			ready = true
+			break
+		}
+		logger.Info("bootstrap: waiting for grafana to be ready", "attempt", i+1)
+		time.Sleep(5 * time.Second)
+	}
+	if !ready {
+		logger.Warn("bootstrap: grafana not ready after 2 minutes, skipping API key setup")
+		return false
+	}
+
+	// Step 1: Check if GRAFANA_API_KEY is already set in the bootstrap secret
+	checkCmd := `kubectl get secret kube-pilot-kube-pilot-bootstrap -n kube-pilot -o jsonpath='{.data.GRAFANA_API_KEY}' 2>/dev/null`
+	checkResult, _ := tools.Shell(ctx, checkCmd)
+	if checkResult != nil && checkResult.Stdout != "" {
+		logger.Info("bootstrap: grafana API key already exists")
+		return false
+	}
+
+	// Step 2: Get Grafana admin password from the k8s secret created by kube-prometheus-stack
+	getPassCmd := `kubectl get secret -n kube-pilot -l app.kubernetes.io/name=grafana -o jsonpath='{.items[0].data.admin-password}' 2>/dev/null | base64 -d`
+	passResult, err := tools.Shell(ctx, getPassCmd)
+	if err != nil || passResult.ExitCode != 0 || passResult.Stdout == "" {
+		logger.Warn("bootstrap: could not read grafana admin password from secret", "error", err)
+		return false
+	}
+	grafanaPass := passResult.Stdout
+
+	// Step 3: Create Grafana service account (idempotent — 409 if exists)
+	createSACmd := fmt.Sprintf(
+		`curl -s -u admin:%s -X POST %s/api/serviceaccounts -H 'Content-Type: application/json' -d '{"name":"kube-pilot","role":"Admin"}'`,
+		shellEscape(grafanaPass), grafanaURL)
+	saResult, err := tools.Shell(ctx, createSACmd)
+	if err != nil {
+		logger.Warn("bootstrap: failed to create grafana service account", "error", err)
+		return false
+	}
+
+	// Parse the SA ID — could be from a fresh create or we need to look it up
+	var saResp struct {
+		ID int `json:"id"`
+	}
+	if err := json.Unmarshal([]byte(saResult.Stdout), &saResp); err != nil || saResp.ID == 0 {
+		// Might be a conflict (already exists) — look it up
+		listCmd := fmt.Sprintf(
+			`curl -s -u admin:%s %s/api/serviceaccounts/search?query=kube-pilot`,
+			shellEscape(grafanaPass), grafanaURL)
+		listResult, err := tools.Shell(ctx, listCmd)
+		if err != nil {
+			logger.Warn("bootstrap: failed to list grafana service accounts", "error", err)
+			return false
+		}
+		var listResp struct {
+			ServiceAccounts []struct {
+				ID int `json:"id"`
+			} `json:"serviceAccounts"`
+		}
+		if err := json.Unmarshal([]byte(listResult.Stdout), &listResp); err != nil || len(listResp.ServiceAccounts) == 0 {
+			logger.Warn("bootstrap: could not find grafana service account", "response", saResult.Stdout)
+			return false
+		}
+		saResp.ID = listResp.ServiceAccounts[0].ID
+	}
+
+	// Step 4: Create a token for the service account
+	createTokenCmd := fmt.Sprintf(
+		`curl -s -u admin:%s -X POST %s/api/serviceaccounts/%d/tokens -H 'Content-Type: application/json' -d '{"name":"kube-pilot-bootstrap"}'`,
+		shellEscape(grafanaPass), grafanaURL, saResp.ID)
+	tokenResult, err := tools.Shell(ctx, createTokenCmd)
+	if err != nil {
+		logger.Warn("bootstrap: failed to create grafana token", "error", err)
+		return false
+	}
+
+	var tokenResp struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal([]byte(tokenResult.Stdout), &tokenResp); err != nil || tokenResp.Key == "" {
+		logger.Warn("bootstrap: failed to parse grafana token", "response", tokenResult.Stdout)
+		return false
+	}
+
+	// Step 5: Store in Vault (if available)
+	vaultCmd := fmt.Sprintf(
+		`kubectl exec -n kube-pilot kube-pilot-vault-0 -- vault kv put secret/kube-pilot/grafana api_key=%s 2>/dev/null`,
+		shellEscape(tokenResp.Key))
+	vaultResult, _ := tools.Shell(ctx, vaultCmd)
+	if vaultResult != nil && vaultResult.ExitCode == 0 {
+		logger.Info("bootstrap: grafana API key stored in vault")
+	}
+
+	// Step 6: Patch the bootstrap secret so the next pod incarnation gets it via envFrom
+	patchCmd := fmt.Sprintf(
+		`kubectl patch secret kube-pilot-kube-pilot-bootstrap -n kube-pilot --type merge -p '{"stringData":{"GRAFANA_API_KEY":"%s"}}'`,
+		tokenResp.Key)
+	patchResult, err := tools.Shell(ctx, patchCmd)
+	if err != nil || patchResult.ExitCode != 0 {
+		logger.Warn("bootstrap: failed to patch bootstrap secret with grafana key", "error", err)
+		return false
+	}
+
+	logger.Info("bootstrap: grafana API key ready")
+	return true
+}
+
+func shellEscape(s string) string {
+	// Single-quote the string, escaping any embedded single quotes
+	// 'foo'\''bar' → foo'bar in shell
+	var result string
+	result += "'"
+	for _, c := range s {
+		if c == '\'' {
+			result += "'\\''"
+		} else {
+			result += string(c)
+		}
+	}
+	result += "'"
+	return result
 }
 
 // --- helpers ---

@@ -15,7 +15,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o /kube-pilot ./cmd/oper
 # Runtime stage
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates tzdata bash curl git openssh-client python3 jq yq ripgrep
+RUN apk add --no-cache ca-certificates tzdata bash curl git openssh-client python3 jq yq ripgrep unzip
 
 # Install kubectl
 RUN curl -sL "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl" -o /usr/local/bin/kubectl \
@@ -37,6 +37,19 @@ RUN curl -sL https://github.com/argoproj/argo-cd/releases/latest/download/argocd
 RUN curl -sL https://github.com/tektoncd/cli/releases/download/v0.39.0/tkn_0.39.0_Linux_x86_64.tar.gz | tar xz -C /tmp \
     && mv /tmp/tkn /usr/local/bin/tkn \
     && rm -rf /tmp/LICENSE /tmp/README.md
+
+# Install logcli (Loki CLI)
+RUN curl -sL https://github.com/grafana/loki/releases/download/v3.4.2/logcli-linux-amd64.zip -o /tmp/logcli.zip \
+    && unzip -o /tmp/logcli.zip -d /tmp \
+    && mv /tmp/logcli-linux-amd64 /usr/local/bin/logcli \
+    && chmod +x /usr/local/bin/logcli \
+    && rm /tmp/logcli.zip
+
+# Install amtool (Alertmanager CLI)
+RUN curl -sL https://github.com/prometheus/alertmanager/releases/download/v0.28.1/alertmanager-0.28.1.linux-amd64.tar.gz | tar xz -C /tmp \
+    && mv /tmp/alertmanager-0.28.1.linux-amd64/amtool /usr/local/bin/amtool \
+    && chmod +x /usr/local/bin/amtool \
+    && rm -rf /tmp/alertmanager-*
 
 # Create non-root user
 RUN adduser -D -u 1000 pilot

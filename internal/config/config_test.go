@@ -150,6 +150,70 @@ github:
 	}
 }
 
+func TestLoadObservabilityConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+observability:
+  enabled: true
+  prometheus:
+    url: http://prometheus:9090
+  grafana:
+    url: http://grafana:3000
+    api_key: gf-key-123
+  loki:
+    url: http://loki:3100
+  alertmanager:
+    url: http://alertmanager:9093
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if !cfg.Observability.Enabled {
+		t.Error("Observability.Enabled = false, want true")
+	}
+	if cfg.Observability.Prometheus.URL != "http://prometheus:9090" {
+		t.Errorf("Prometheus.URL = %q", cfg.Observability.Prometheus.URL)
+	}
+	if cfg.Observability.Grafana.URL != "http://grafana:3000" {
+		t.Errorf("Grafana.URL = %q", cfg.Observability.Grafana.URL)
+	}
+	if cfg.Observability.Grafana.APIKey != "gf-key-123" {
+		t.Errorf("Grafana.APIKey = %q", cfg.Observability.Grafana.APIKey)
+	}
+	if cfg.Observability.Loki.URL != "http://loki:3100" {
+		t.Errorf("Loki.URL = %q", cfg.Observability.Loki.URL)
+	}
+	if cfg.Observability.Alertmanager.URL != "http://alertmanager:9093" {
+		t.Errorf("Alertmanager.URL = %q", cfg.Observability.Alertmanager.URL)
+	}
+}
+
+func TestLoadObservabilityDisabledByDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+llm:
+  provider: openai
+  model: gpt-4
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Observability.Enabled {
+		t.Error("Observability.Enabled = true by default, want false")
+	}
+}
+
 func TestLoadFileNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/config.yaml")
 	if err == nil {

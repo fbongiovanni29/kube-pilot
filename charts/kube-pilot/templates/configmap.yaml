@@ -68,3 +68,17 @@ data:
       cluster_issuer: {{ .Values.ingress.clusterIssuer }}
       {{- end }}
     {{- end }}
+
+    {{- if .Values.observability.enabled }}
+    observability:
+      enabled: true
+      prometheus:
+        url: {{ .Values.observability.prometheus.url | default (printf "http://%s-kube-prometheus-prometheus.%s.svc:9090" .Release.Name .Release.Namespace) }}
+      grafana:
+        url: {{ .Values.observability.grafana.url | default (printf "http://%s-grafana.%s.svc:80" .Release.Name .Release.Namespace) }}
+        api_key: ${GRAFANA_API_KEY}
+      loki:
+        url: {{ .Values.observability.loki.url | default (printf "http://%s-loki.%s.svc:3100" .Release.Name .Release.Namespace) }}
+      alertmanager:
+        url: {{ .Values.observability.alertmanager.url | default (printf "http://%s-kube-prometheus-alertmanager.%s.svc:9093" .Release.Name .Release.Namespace) }}
+    {{- end }}

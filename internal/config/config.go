@@ -17,7 +17,8 @@ type Config struct {
 	Server  ServerConfig  `yaml:"server"`
 	Cluster ClusterConfig `yaml:"cluster"`
 	Context ContextConfig `yaml:"context"`
-	Ingress IngressConfig `yaml:"ingress"`
+	Ingress       IngressConfig       `yaml:"ingress"`
+	Observability ObservabilityConfig `yaml:"observability"`
 }
 
 // ContextConfig holds settings for the cross-session context system.
@@ -78,6 +79,36 @@ type IngressConfig struct {
 	Domain         string `yaml:"domain"`           // e.g. "apps.example.com" — services get <name>.<domain>
 	TLSEnabled     bool   `yaml:"tls_enabled"`      // create TLS-terminated ingresses
 	ClusterIssuer  string `yaml:"cluster_issuer"`   // cert-manager ClusterIssuer name (e.g. "letsencrypt-prod")
+}
+
+// ObservabilityConfig tells the agent how to query metrics, logs, and alerts.
+type ObservabilityConfig struct {
+	Enabled      bool                 `yaml:"enabled"`
+	Prometheus   PrometheusEndpoint   `yaml:"prometheus"`
+	Grafana      GrafanaEndpoint      `yaml:"grafana"`
+	Loki         LokiEndpoint         `yaml:"loki"`
+	Alertmanager AlertmanagerEndpoint `yaml:"alertmanager"`
+}
+
+// PrometheusEndpoint holds Prometheus connection info.
+type PrometheusEndpoint struct {
+	URL string `yaml:"url"`
+}
+
+// GrafanaEndpoint holds Grafana connection info.
+type GrafanaEndpoint struct {
+	URL    string `yaml:"url"`
+	APIKey string `yaml:"api_key"`
+}
+
+// LokiEndpoint holds Loki connection info.
+type LokiEndpoint struct {
+	URL string `yaml:"url"`
+}
+
+// AlertmanagerEndpoint holds Alertmanager connection info.
+type AlertmanagerEndpoint struct {
+	URL string `yaml:"url"`
 }
 
 // Load reads config from a YAML file with env var expansion.

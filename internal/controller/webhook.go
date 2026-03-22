@@ -440,6 +440,10 @@ func (h *WebhookHandler) createAgent(repoFullName string) *agent.Agent {
 		opts = append(opts, agent.WithIngressConfig(&h.cfg.Ingress))
 	}
 
+	if h.cfg.Observability.Enabled {
+		opts = append(opts, agent.WithObservabilityConfig(&h.cfg.Observability))
+	}
+
 	return agent.New(h.client, h.gitea, giteaInfo, h.logger, opts...)
 }
 
@@ -606,6 +610,102 @@ func hasLabel(labels []ghLabel, name string) bool {
 		}
 	}
 	return false
+}
+
+// alertmanagerPayload represents the Alertmanager webhook JSON payload.
+type alertmanagerPayload struct {
+	Status string              `json:"status"`
+	Alerts []alertmanagerAlert `json:"alerts"`
+}
+
+// alertmanagerAlert represents a single alert from Alertmanager.
+type alertmanagerAlert struct {
+	Status      string            `json:"status"`
+	Labels      map[string]string `json:"labels"`
+	Annotations map[string]string `json:"annotations"`
+	StartsAt    string            `json:"startsAt"`
+	EndsAt      string            `json:"endsAt"`
+}
+
+// HandleAlertmanager handles incoming Alertmanager webhook requests.
+// Firing alerts become agent tasks that investigate and attempt to fix issues.
+func (h *WebhookHandler) HandleAlertmanager(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read body", http.StatusBadRequest)
+		return
+	}
+
+	var payload alertmanagerPayload
+	if err := json.Unmarshal(body, &payload); err != nil {
+		h.logger.Error("parse alertmanager payload", "error", err)
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return
+	}
+
+	for _, alert := range payload.Alerts {
+		if alert.Status != "firing" {
+			continue
+		}
+
+		alertName := alert.Labels["alertname"]
+		namespace := alert.Labels["namespace"]
+		pod := alert.Labels["pod"]
+		severity := alert.Labels["severity"]
+		summary := alert.Annotations["summary"]
+		description := alert.Annotations["description"]
+
+		task := fmt.Sprintf(`Alertmanager alert firing — investigate and fix if possible.
+
+Alert: %s
+Severity: %s
+Namespace: %s
+Pod: %s
+Summary: %s
+Description: %s
+
+Labels: %v
+
+Investigation steps:
+1. Triage: kubectl get pods -n %s — check pod status, restarts, age
+2. Logs: use logcli to query Loki for recent errors from the affected pod/namespace (see Observability section in your system prompt for exact commands)
+3. Metrics: use curl to query Prometheus for CPU, memory, error rate, and restart count (see Observability section for PromQL examples)
+4. Diagnose: kubectl describe pod, kubectl get events -n %s --sort-by=.lastTimestamp
+5. Fix: if code/config change needed, commit through git (standard deploy workflow). If immediate action needed (restart stuck pod, scale up), use kubectl directly
+6. Verify: confirm the fix resolved the issue — check pod status, query metrics again
+7. Silence: if investigating, silence the alert with amtool to prevent repeated triggers while you work
+8. Report: comment on the alert investigation with findings and actions taken`,
+			alertName, severity, namespace, pod, summary, description,
+			alert.Labels, namespace, namespace,
+		)
+
+		// Dedup key: use alertname + namespace as a stable identifier
+		dedupKey := fmt.Sprintf("__alertmanager__%s_%s", alertName, namespace)
+		// Use a hash-based issue number for dedup
+		issueNum := int(alertHash(alertName, namespace))
+
+		h.logger.Info("alertmanager alert",
+			"alertname", alertName,
+			"namespace", namespace,
+			"severity", severity,
+		)
+
+		h.dispatch(issueKey{repo: dedupKey, issueNumber: issueNum}, task, "__alertmanager__")
+	}
+
+	w.WriteHeader(http.StatusOK)
+}
+
+// alertHash produces a stable positive int from alert name + namespace for dedup.
+func alertHash(alertName, namespace string) uint32 {
+	h := sha256.Sum256([]byte(alertName + "/" + namespace))
+	return uint32(h[0])<<24 | uint32(h[1])<<16 | uint32(h[2])<<8 | uint32(h[3])
 }
 
 func verifySignature(payload []byte, signature, secret string) bool {

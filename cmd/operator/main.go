@@ -69,6 +69,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle("/webhook", webhook)
+	mux.HandleFunc("/alertmanager-webhook", webhook.HandleAlertmanager)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprint(w, "ok")

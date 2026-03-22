@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 
+	"time"
+
 	"github.com/fbongiovanni29/kube-pilot/internal/agent"
 	"github.com/fbongiovanni29/kube-pilot/internal/config"
 	"github.com/fbongiovanni29/kube-pilot/internal/tools"
@@ -367,6 +369,188 @@ func TestBotCommentIgnored(t *testing.T) {
 	h.mu.Lock()
 	if len(h.agents) != 0 {
 		t.Error("expected no agent to be started for bot's own comment")
+	}
+	h.mu.Unlock()
+}
+
+func TestHandleAlertmanagerFiringAlert(t *testing.T) {
+	h := &WebhookHandler{
+		cfg:    &config.Config{Git: config.GitConfig{Provider: "gitea"}},
+		logger: testLogger(),
+		agents: make(map[issueKey]*agent.Agent),
+	}
+
+	payload := alertmanagerPayload{
+		Status: "firing",
+		Alerts: []alertmanagerAlert{
+			{
+				Status: "firing",
+				Labels: map[string]string{
+					"alertname": "HighErrorRate",
+					"namespace": "default",
+					"pod":       "web-app-xyz",
+					"severity":  "critical",
+				},
+				Annotations: map[string]string{
+					"summary":     "Error rate above 5%",
+					"description": "Pod web-app-xyz has error rate of 12%",
+				},
+				StartsAt: "2026-03-22T10:00:00Z",
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest("POST", "/alertmanager-webhook", strings.NewReader(string(body)))
+	w := httptest.NewRecorder()
+	h.HandleAlertmanager(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// Verify an agent was dispatched (slot reserved)
+	time.Sleep(50 * time.Millisecond) // let goroutine start
+	h.mu.Lock()
+	found := false
+	for k := range h.agents {
+		if strings.Contains(k.repo, "__alertmanager__") {
+			found = true
+		}
+	}
+	h.mu.Unlock()
+
+	if !found {
+		t.Error("expected agent to be dispatched for firing alert")
+	}
+}
+
+func TestHandleAlertmanagerResolvedIgnored(t *testing.T) {
+	h := &WebhookHandler{
+		cfg:    &config.Config{Git: config.GitConfig{Provider: "gitea"}},
+		logger: testLogger(),
+		agents: make(map[issueKey]*agent.Agent),
+	}
+
+	payload := alertmanagerPayload{
+		Status: "resolved",
+		Alerts: []alertmanagerAlert{
+			{
+				Status: "resolved",
+				Labels: map[string]string{
+					"alertname": "HighErrorRate",
+					"namespace": "default",
+				},
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest("POST", "/alertmanager-webhook", strings.NewReader(string(body)))
+	w := httptest.NewRecorder()
+	h.HandleAlertmanager(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// No agent should be dispatched for resolved alerts
+	h.mu.Lock()
+	if len(h.agents) != 0 {
+		t.Error("expected no agent to be dispatched for resolved alert")
+	}
+	h.mu.Unlock()
+}
+
+func TestHandleAlertmanagerMethodNotAllowed(t *testing.T) {
+	h := &WebhookHandler{
+		cfg:    &config.Config{},
+		logger: testLogger(),
+	}
+
+	req := httptest.NewRequest("GET", "/alertmanager-webhook", nil)
+	w := httptest.NewRecorder()
+	h.HandleAlertmanager(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestHandleAlertmanagerInvalidPayload(t *testing.T) {
+	h := &WebhookHandler{
+		cfg:    &config.Config{},
+		logger: testLogger(),
+		agents: make(map[issueKey]*agent.Agent),
+	}
+
+	req := httptest.NewRequest("POST", "/alertmanager-webhook", strings.NewReader("not json"))
+	w := httptest.NewRecorder()
+	h.HandleAlertmanager(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAlertHashStable(t *testing.T) {
+	h1 := alertHash("HighErrorRate", "default")
+	h2 := alertHash("HighErrorRate", "default")
+	h3 := alertHash("OtherAlert", "default")
+
+	if h1 != h2 {
+		t.Error("expected same inputs to produce same hash")
+	}
+	if h1 == h3 {
+		t.Error("expected different inputs to produce different hash")
+	}
+}
+
+func TestHandleAlertmanagerDedup(t *testing.T) {
+	h := &WebhookHandler{
+		cfg:    &config.Config{Git: config.GitConfig{Provider: "gitea"}},
+		logger: testLogger(),
+		agents: make(map[issueKey]*agent.Agent),
+	}
+
+	// Pre-register an agent for this alert to test dedup
+	alertName := "HighErrorRate"
+	namespace := "default"
+	dedupKey := "__alertmanager__" + alertName + "_" + namespace
+	issueNum := int(alertHash(alertName, namespace))
+	key := issueKey{repo: dedupKey, issueNumber: issueNum}
+
+	existingAgent := agent.New(nil, nil, nil, testLogger())
+	h.mu.Lock()
+	h.agents[key] = existingAgent
+	h.mu.Unlock()
+
+	payload := alertmanagerPayload{
+		Status: "firing",
+		Alerts: []alertmanagerAlert{
+			{
+				Status: "firing",
+				Labels: map[string]string{
+					"alertname": alertName,
+					"namespace": namespace,
+				},
+			},
+		},
+	}
+	body, _ := json.Marshal(payload)
+
+	req := httptest.NewRequest("POST", "/alertmanager-webhook", strings.NewReader(string(body)))
+	w := httptest.NewRecorder()
+	h.HandleAlertmanager(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// Should still be the same agent (injected, not replaced)
+	h.mu.Lock()
+	if h.agents[key] != existingAgent {
+		t.Error("expected same agent instance after dedup (inject, not replace)")
 	}
 	h.mu.Unlock()
 }
