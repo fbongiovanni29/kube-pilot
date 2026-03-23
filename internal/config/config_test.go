@@ -214,6 +214,46 @@ llm:
 	}
 }
 
+func TestLoadCrossplaneConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+crossplane:
+  enabled: true
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if !cfg.Crossplane.Enabled {
+		t.Error("Crossplane.Enabled = false, want true")
+	}
+}
+
+func TestLoadCrossplaneDisabledByDefault(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+llm:
+  provider: openai
+  model: gpt-4
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Crossplane.Enabled {
+		t.Error("Crossplane.Enabled = true by default, want false")
+	}
+}
+
 func TestLoadFileNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/config.yaml")
 	if err == nil {

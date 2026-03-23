@@ -134,3 +134,20 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "kube-pilot.fullname" . }}
     namespace: kube-pilot
+{{- if .Values.crossplane.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "kube-pilot.fullname" . }}-crossplane-admin
+  labels:
+    {{- include "kube-pilot.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: crossplane-admin
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "kube-pilot.fullname" . }}
+    namespace: kube-pilot
+{{- end }}

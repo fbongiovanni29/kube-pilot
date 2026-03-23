@@ -69,6 +69,11 @@ data:
       {{- end }}
     {{- end }}
 
+    {{- if .Values.crossplane.enabled }}
+    crossplane:
+      enabled: true
+    {{- end }}
+
     {{- if .Values.observability.enabled }}
     observability:
       enabled: true

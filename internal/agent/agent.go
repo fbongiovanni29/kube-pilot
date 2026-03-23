@@ -100,6 +100,7 @@ type Agent struct {
 	contextStore   *kpctx.Store
 	ingressConfig       *config.IngressConfig
 	observabilityConfig *config.ObservabilityConfig
+	crossplaneConfig    *config.CrossplaneConfig
 	inbox               chan string // mid-flight messages injected between steps
 	workDir        string     // unique temp directory for this agent's shell commands
 }
@@ -162,6 +163,11 @@ func WithIngressConfig(cfg *config.IngressConfig) Option {
 // WithObservabilityConfig tells the agent how to query metrics, logs, and alerts.
 func WithObservabilityConfig(cfg *config.ObservabilityConfig) Option {
 	return func(a *Agent) { a.observabilityConfig = cfg }
+}
+
+// WithCrossplaneConfig tells the agent how to provision cloud infrastructure via Crossplane.
+func WithCrossplaneConfig(cfg *config.CrossplaneConfig) Option {
+	return func(a *Agent) { a.crossplaneConfig = cfg }
 }
 
 // knownSecrets returns secret values that should be scrubbed from public output.
@@ -378,6 +384,93 @@ Dashboard tips:
 - NEVER print, echo, or expose $GRAFANA_API_KEY in any output
 `, a.observabilityConfig.Grafana.URL, a.observabilityConfig.Grafana.URL, a.observabilityConfig.Grafana.URL, a.observabilityConfig.Grafana.URL, a.observabilityConfig.Grafana.URL)
 		}
+	}
+
+	if a.crossplaneConfig != nil && a.crossplaneConfig.Enabled {
+		prompt += `
+## Crossplane (Cloud Infrastructure)
+
+Crossplane is installed on this cluster. It lets you provision and manage cloud infrastructure (VPCs, databases, clusters, buckets, etc.) using kubectl — no Terraform, no CLI credentials on your machine.
+
+### Providers
+Crossplane Providers add support for a cloud (AWS, GCP, Azure, etc.). To install one:
+  kubectl apply -f - <<EOF
+  apiVersion: pkg.crossplane.io/v1
+  kind: Provider
+  metadata:
+    name: provider-aws-ec2
+  spec:
+    package: xpkg.upbound.io/upbound/provider-aws-ec2:v1
+  EOF
+
+Check installed providers:
+  kubectl get providers
+
+Wait for a provider to become healthy:
+  kubectl wait provider/provider-aws-ec2 --for=condition=Healthy --timeout=120s
+
+### ProviderConfigs (credential binding)
+Each provider needs a ProviderConfig that references a credentials Secret:
+  apiVersion: aws.upbound.io/v1beta1
+  kind: ProviderConfig
+  metadata:
+    name: default
+  spec:
+    credentials:
+      source: Secret
+      secretRef:
+        namespace: crossplane-system
+        name: aws-credentials
+        key: creds
+
+Credentials MUST come from Vault / ExternalSecret — never put raw keys in manifests.
+
+### Managed Resources
+Create cloud resources by applying a manifest:
+  apiVersion: ec2.aws.upbound.io/v1beta1
+  kind: VPC
+  metadata:
+    name: my-vpc
+  spec:
+    forProvider:
+      region: us-east-1
+      cidrBlock: 10.0.0.0/16
+
+Check status of all managed resources:
+  kubectl get managed
+
+Inspect a specific resource:
+  kubectl describe vpc.ec2.aws.upbound.io/my-vpc
+
+### Composite Resources (XRDs, Compositions, Claims)
+- XRDs define a custom API (e.g. CompositeNetwork)
+- Compositions map that API to concrete managed resources
+- Claims let namespaced users request infrastructure
+
+List XRDs:          kubectl get xrd
+List Compositions:  kubectl get compositions
+List Claims:        kubectl get claim --all-namespaces
+
+### Workflow
+1. Check installed providers: kubectl get providers
+2. Install the needed provider if missing (apply a Provider CR)
+3. Ensure a ProviderConfig exists with valid credentials
+4. Create the managed resource manifest, commit to git (ArgoCD syncs it)
+5. Monitor: kubectl get managed — watch READY and SYNCED conditions
+6. Debug: kubectl describe <resource> — check status.conditions and events
+
+### Status patterns
+- READY=True, SYNCED=True → resource is provisioned and in sync
+- READY=False, SYNCED=True → provider accepted the spec but cloud hasn't finished provisioning (wait)
+- SYNCED=False → spec error or credential issue — check kubectl describe and provider pod logs:
+    kubectl logs -n crossplane-system -l pkg.crossplane.io/revision -c package-runtime --tail=50
+
+### Rules
+- ALL persistent infrastructure goes through git → ArgoCD (same as app manifests)
+- Cloud credentials MUST be stored in Vault and injected via ExternalSecret — never in manifests
+- Provisioning is async — after applying, poll READY/SYNCED conditions before reporting success
+- Do NOT use provider-kubernetes or provider-helm — Crossplane is for non-Kubernetes cloud resources only
+`
 	}
 
 	prompt += systemPromptSuffix

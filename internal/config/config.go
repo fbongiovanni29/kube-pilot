@@ -19,6 +19,7 @@ type Config struct {
 	Context ContextConfig `yaml:"context"`
 	Ingress       IngressConfig       `yaml:"ingress"`
 	Observability ObservabilityConfig `yaml:"observability"`
+	Crossplane    CrossplaneConfig    `yaml:"crossplane"`
 }
 
 // ContextConfig holds settings for the cross-session context system.
@@ -109,6 +110,11 @@ type LokiEndpoint struct {
 // AlertmanagerEndpoint holds Alertmanager connection info.
 type AlertmanagerEndpoint struct {
 	URL string `yaml:"url"`
+}
+
+// CrossplaneConfig tells the agent whether Crossplane is available for cloud infrastructure provisioning.
+type CrossplaneConfig struct {
+	Enabled bool `yaml:"enabled"`
 }
 
 // Load reads config from a YAML file with env var expansion.

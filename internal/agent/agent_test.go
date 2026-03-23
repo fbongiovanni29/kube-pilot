@@ -559,6 +559,44 @@ func TestSystemPromptObservabilityPartial(t *testing.T) {
 	}
 }
 
+func TestSystemPromptWithCrossplane(t *testing.T) {
+	cpCfg := &config.CrossplaneConfig{Enabled: true}
+	a := New(&mockClient{}, nil, nil, testLogger(), WithCrossplaneConfig(cpCfg))
+	prompt := a.systemPrompt()
+
+	if !strings.Contains(prompt, "## Crossplane (Cloud Infrastructure)") {
+		t.Error("expected system prompt to contain '## Crossplane (Cloud Infrastructure)'")
+	}
+	if !strings.Contains(prompt, "kubectl get providers") {
+		t.Error("expected system prompt to contain provider check command")
+	}
+	if !strings.Contains(prompt, "kubectl get managed") {
+		t.Error("expected system prompt to contain managed resource check")
+	}
+	if !strings.Contains(prompt, "ProviderConfig") {
+		t.Error("expected system prompt to contain ProviderConfig guidance")
+	}
+}
+
+func TestSystemPromptWithoutCrossplane(t *testing.T) {
+	a := New(&mockClient{}, nil, nil, testLogger())
+	prompt := a.systemPrompt()
+
+	if strings.Contains(prompt, "## Crossplane") {
+		t.Error("expected system prompt to NOT contain '## Crossplane' without config")
+	}
+}
+
+func TestSystemPromptCrossplaneDisabled(t *testing.T) {
+	cpCfg := &config.CrossplaneConfig{Enabled: false}
+	a := New(&mockClient{}, nil, nil, testLogger(), WithCrossplaneConfig(cpCfg))
+	prompt := a.systemPrompt()
+
+	if strings.Contains(prompt, "## Crossplane") {
+		t.Error("expected system prompt to NOT contain '## Crossplane' when disabled")
+	}
+}
+
 func TestMessageSize(t *testing.T) {
 	m := llm.Message{
 		Role:    llm.RoleAssistant,

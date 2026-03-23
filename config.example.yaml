@@ -45,3 +45,9 @@ observability:
     url: http://kube-pilot-loki.kube-pilot.svc:3100
   alertmanager:
     url: http://kube-pilot-kube-prometheus-stack-alertmanager.kube-pilot.svc:9093
+
+# Crossplane — cloud infrastructure provisioning via kubectl (optional)
+# Enable via Helm (crossplane.enabled) to install Crossplane.
+# Then install Providers (AWS, GCP, Azure) via Provider CRs.
+crossplane:
+  enabled: false

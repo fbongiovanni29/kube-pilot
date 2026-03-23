@@ -231,3 +231,6 @@ observability:
 
 crossplane:
   enabled: false
+  # Crossplane subchart values — see https://docs.crossplane.io/latest/software/install/
+  # Crossplane's defaults are sensible. Install Providers separately via Provider CRs.
+  # Cloud credentials are injected via Vault + ExternalSecret into ProviderConfigs.

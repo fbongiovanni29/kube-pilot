@@ -29,5 +29,8 @@ dependencies:
 - name: loki
   repository: https://grafana.github.io/helm-charts
   version: 6.29.0
-digest: sha256:fe0d7fd06ae103edf9030e71640fdee32d68bd3a2069540b14c03f8ffe9a1882
-generated: "2026-03-22T12:48:07.676153934-04:00"
+- name: crossplane
+  repository: https://charts.crossplane.io/stable
+  version: 1.19.0
+digest: sha256:dbb983e3160b4f59a11455dca1b8c73a41f064f21d8fdd99a9fb72e68ee99113
+generated: "2026-03-23T18:18:14.164239096-04:00"
