@@ -4,7 +4,7 @@
 
 > **This is a proof of concept.** It works — we've deployed a full multi-service app from scratch on a single k3s node — but it's early. Expect rough edges.
 
-**A headless AI engineer that runs in your Kubernetes cluster with access to all your dev tools.**
+**An autonomous software agent that runs in your Kubernetes cluster with access to all your dev tools.**
 
 There's no UI. You talk to it the way you already work — file a GitHub issue, and it picks it up, writes the code, builds the container, deploys it, verifies it's running, and closes the ticket. If it crashes, it reads the logs, fixes the bug, and redeploys. When an alert fires at 3am, it wakes up, queries the metrics, reads the logs, and fixes the problem before you check your phone. Need a new database or a whole Kubernetes cluster in the cloud? It provisions real infrastructure through Crossplane — VPCs, RDS instances, GKE clusters — all via GitOps, all from a GitHub issue.
 
@@ -50,12 +50,12 @@ kube-pilot:
 
 ## What makes this different
 
-AI coding tools generate code. Then you copy it, build it, deploy it, debug it, and iterate manually. The feedback loop is broken.
+Code generation tools generate code. Then you copy it, build it, deploy it, debug it, and iterate manually. The feedback loop is broken.
 
 kube-pilot closes the loop. It lives inside the cluster with direct access to every tool in your dev stack — git, CI/CD, container registry, deployment pipelines, kubectl, Prometheus, Grafana, Loki. You communicate with it through the tools you already use (GitHub, Slack*, Jira*), and it acts with all the tools in your cluster.
 
-| AI coding tools | kube-pilot |
-|----------------|------------|
+| Code generation tools | kube-pilot |
+|----------------------|------------|
 | Generates code | Generates code |
 | You build it | Builds it (Tekton + Kaniko) |
 | You deploy it | Deploys it (git push + ArgoCD) |
@@ -65,15 +65,15 @@ kube-pilot closes the loop. It lives inside the cluster with direct access to ev
 | You wake up at 3am | Alertmanager wakes *it* up — it investigates and fixes autonomously |
 | You provision infra manually | Provisions VPCs, databases, clusters via Crossplane — from a GitHub issue |
 
-It's not an ops bot. It's not a chatbot with kubectl access. It's an autonomous software engineer that happens to live inside your cluster — and it can provision the cloud infrastructure that cluster runs on.
+It's not an ops bot. It's not a chatbot with kubectl access. It's an autonomous engineer that happens to live inside your cluster — and it can provision the cloud infrastructure that cluster runs on.
 
-### Why Kubernetes is the perfect reasoning surface for AI
+### Why Kubernetes is the perfect reasoning surface
 
-Kubernetes clusters are already built around the primitives that AI agents need: declarative state, observable outcomes, and deterministic tooling. Every action has a verifiable result — `kubectl get pods` tells you if the deploy worked, `curl /healthz` tells you if the service is alive, build logs tell you exactly what failed. There's no ambiguity.
+Kubernetes clusters are already built around the primitives that autonomous agents need: declarative state, observable outcomes, and deterministic tooling. Every action has a verifiable result — `kubectl get pods` tells you if the deploy worked, `curl /healthz` tells you if the service is alive, build logs tell you exactly what failed. There's no ambiguity.
 
-This is what makes Kubernetes fundamentally different from a local dev environment as an AI substrate. The entire dev stack — git, CI/CD, container builds, deployment, networking, observability — is API-addressable and composable. Secrets stay behind Vault where the agent never sees them — it creates ExternalSecret references, not raw credentials. An LLM doesn't need a GUI or IDE. It needs tools that take structured input and return structured output. That's what Kubernetes is.
+This is what makes Kubernetes fundamentally different from a local dev environment as a substrate for automation. The entire dev stack — git, CI/CD, container builds, deployment, networking, observability — is API-addressable and composable. Secrets stay behind Vault where the agent never sees them — it creates ExternalSecret references, not raw credentials. An LLM doesn't need a GUI or IDE. It needs tools that take structured input and return structured output. That's what Kubernetes is.
 
-kube-pilot doesn't bolt AI onto an existing workflow. It uses the cluster itself as the reasoning environment — every tool call produces observable state that feeds back into the next decision. With Crossplane, this extends beyond the cluster boundary — the agent provisions cloud infrastructure (VPCs, databases, entire Kubernetes clusters) using the same kubectl interface, the same GitOps workflow, and the same observable status conditions. The cluster isn't just where code runs. It's where the agent thinks — and from where it builds the rest of your infrastructure.
+kube-pilot doesn't bolt automation onto an existing workflow. It uses the cluster itself as the reasoning environment — every tool call produces observable state that feeds back into the next decision. With Crossplane, this extends beyond the cluster boundary — the agent provisions cloud infrastructure (VPCs, databases, entire Kubernetes clusters) using the same kubectl interface, the same GitOps workflow, and the same observable status conditions. The cluster isn't just where code runs. It's where the agent thinks — and from where it builds the rest of your infrastructure.
 
 ---
 
@@ -81,7 +81,7 @@ kube-pilot doesn't bolt AI onto an existing workflow. It uses the cluster itself
 
 ```
   Issue opened             kube-pilot                     Cluster
-  (GitHub/Gitea/Slack*)    (AI agent)
+  (GitHub/Gitea/Slack*)    (agent)
        │                       │
        │    webhook            │
        ├──────────────────────►│
@@ -131,7 +131,7 @@ For infrastructure tasks, the flow extends to the cloud:
 
 ### The agent loop
 
-kube-pilot is a tool-calling agent. The LLM receives the task, decides what tools to call (`exec`, `git_comment`, `read_file`, `create_pr`, etc.), executes them, observes the results, and iterates. If a build fails, it reads the logs and fixes the code. If a deployment crashes, it checks `kubectl describe` and adjusts the manifests. It runs up to 75 steps before giving up.
+kube-pilot is a tool-calling agent backed by an LLM. It receives a task, decides what tools to call (`exec`, `git_comment`, `read_file`, `create_pr`, etc.), executes them, observes the results, and iterates. If a build fails, it reads the logs and fixes the code. If a deployment crashes, it checks `kubectl describe` and adjusts the manifests. It runs up to 75 steps before giving up.
 
 ### What's in the box
 
@@ -139,7 +139,7 @@ One `helm install` gives you:
 
 | Component | Role |
 |-----------|------|
-| **kube-pilot** | AI agent — webhook handler, LLM tool-calling loop, shell access |
+| **kube-pilot** | LLM-powered agent — webhook handler, tool-calling loop, shell access |
 | **Gitea** | Git server + container registry (no external dependencies) |
 | **Tekton** | Container image builds via Kaniko TaskRuns |
 | **ArgoCD** | GitOps — watches infra repo, syncs manifests to cluster |
@@ -154,7 +154,7 @@ One `helm install` gives you:
 | **Alertmanager** | Alert routing — firing alerts become agent tasks (optional) |
 | **Crossplane** | Cloud infrastructure provisioning — VPCs, databases, clusters via kubectl (optional) |
 
-Everything runs in-cluster. No public URLs. No SaaS accounts. No Docker Hub. With Crossplane, the agent reaches out to provision cloud infrastructure — but the control plane stays in your cluster.
+Everything runs in-cluster. No public URLs. No SaaS accounts. No Docker Hub. With Crossplane, kube-pilot reaches out to provision cloud infrastructure — but the control plane stays in your cluster.
 
 ---
 
@@ -191,7 +191,7 @@ kube-pilot has native access to your monitoring stack. When investigating any is
 - Create and update **Grafana** dashboards via the API
 
 ### Cloud infrastructure provisioning
-kube-pilot can provision and manage real cloud infrastructure — not just deploy apps. With Crossplane enabled, the agent can create VPCs, databases, Kubernetes clusters, storage buckets, and any other cloud resource — all through kubectl, all through GitOps.
+kube-pilot can provision and manage real cloud infrastructure — not just deploy apps. With Crossplane enabled, it can create VPCs, databases, Kubernetes clusters, storage buckets, and any other cloud resource — all through kubectl, all through GitOps.
 
 Tested and validated: a single GitHub issue spun up a GKE Autopilot cluster on GCP in ~9 minutes. Credentials never touch a manifest — they flow through Vault → ExternalSecret → Crossplane ProviderConfig. The agent installs the right Crossplane Provider, wires up credentials, creates the resource, and polls until it's ready.
 
@@ -274,7 +274,7 @@ llm:
   apiKey: ${LLM_API_KEY}
 ```
 
-Currently tested with Claude (Anthropic). Should work with any OpenAI-compatible endpoint (GPT-4, Ollama, LiteLLM, vLLM). For Ollama, point `baseURL` at your Ollama service and pick a model.
+Currently tested with Claude (Anthropic). Should work with any OpenAI-compatible endpoint (GPT-4, Ollama, vLLM). For Ollama, point `baseURL` at your Ollama service and pick a model.
 
 ### Git provider
 

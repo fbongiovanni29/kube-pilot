@@ -12,7 +12,7 @@ import (
 )
 
 // OpenAICompatClient works with any OpenAI-compatible API:
-// Anthropic (via proxy), OpenAI, Ollama, vLLM, LiteLLM, etc.
+// Anthropic (via proxy), OpenAI, Ollama, vLLM, etc.
 type OpenAICompatClient struct {
 	baseURL    string
 	apiKey     string
