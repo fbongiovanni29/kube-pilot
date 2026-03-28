@@ -448,6 +448,10 @@ func (h *WebhookHandler) createAgent(repoFullName string) *agent.Agent {
 		opts = append(opts, agent.WithCrossplaneConfig(&h.cfg.Crossplane))
 	}
 
+	if h.cfg.Agent.SystemPrompt != "" {
+		opts = append(opts, agent.WithSystemPrompt(h.cfg.Agent.SystemPrompt))
+	}
+
 	return agent.New(h.client, h.gitea, giteaInfo, h.logger, opts...)
 }
 

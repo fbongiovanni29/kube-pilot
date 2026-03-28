@@ -597,6 +597,58 @@ func TestSystemPromptCrossplaneDisabled(t *testing.T) {
 	}
 }
 
+func TestSystemPromptCustom(t *testing.T) {
+	custom := "You are a custom agent. Git provider is {{.GitProvider}}."
+	a := New(&mockClient{}, nil, nil, testLogger(), WithSystemPrompt(custom))
+	prompt := a.systemPrompt()
+
+	if !strings.Contains(prompt, "You are a custom agent.") {
+		t.Error("expected system prompt to contain custom text")
+	}
+	if !strings.Contains(prompt, "Git provider is github.") {
+		t.Error("expected template variable to be expanded")
+	}
+	// Dynamic sections should still be appended
+	if !strings.Contains(prompt, "Available CLI tools") {
+		t.Error("expected suffix to still be appended to custom prompt")
+	}
+}
+
+func TestSystemPromptCustomWithGitea(t *testing.T) {
+	custom := "Agent using {{.GitProvider}} at {{.GiteaURL}} host={{.GiteaHost}}"
+	giteaInfo := &GiteaInfo{URL: "http://gitea.local:3000", User: "admin", Password: "pass"}
+	a := New(&mockClient{}, nil, giteaInfo, testLogger(), WithSystemPrompt(custom))
+	prompt := a.systemPrompt()
+
+	if !strings.Contains(prompt, "Agent using gitea at http://gitea.local:3000 host=gitea.local:3000") {
+		t.Errorf("expected Gitea template vars to be expanded, got prompt starting with: %s", prompt[:100])
+	}
+}
+
+func TestSystemPromptCustomFallbackOnBadTemplate(t *testing.T) {
+	bad := "You are {{.Bad"
+	a := New(&mockClient{}, nil, nil, testLogger(), WithSystemPrompt(bad))
+	prompt := a.systemPrompt()
+
+	// Should fall back to default — contains the base prompt
+	if !strings.Contains(prompt, "kube-pilot") {
+		t.Error("expected fallback to default prompt on bad template")
+	}
+}
+
+func TestSystemPromptDefaultWhenEmpty(t *testing.T) {
+	a := New(&mockClient{}, nil, nil, testLogger())
+	prompt := a.systemPrompt()
+
+	// Should use compiled-in default
+	if !strings.Contains(prompt, "kube-pilot") {
+		t.Error("expected default prompt to contain kube-pilot")
+	}
+	if !strings.Contains(prompt, "GitHub") {
+		t.Error("expected default prompt to contain GitHub section")
+	}
+}
+
 func TestMessageSize(t *testing.T) {
 	m := llm.Message{
 		Role:    llm.RoleAssistant,

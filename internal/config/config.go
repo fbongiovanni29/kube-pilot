@@ -20,6 +20,12 @@ type Config struct {
 	Ingress       IngressConfig       `yaml:"ingress"`
 	Observability ObservabilityConfig `yaml:"observability"`
 	Crossplane    CrossplaneConfig    `yaml:"crossplane"`
+	Agent         AgentConfig         `yaml:"agent"`
+}
+
+// AgentConfig holds agent behavior settings.
+type AgentConfig struct {
+	SystemPrompt string `yaml:"system_prompt"`
 }
 
 // ContextConfig holds settings for the cross-session context system.

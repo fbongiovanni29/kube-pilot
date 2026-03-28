@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -232,6 +233,32 @@ crossplane:
 
 	if !cfg.Crossplane.Enabled {
 		t.Error("Crossplane.Enabled = false, want true")
+	}
+}
+
+func TestLoadAgentSystemPrompt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte(`
+llm:
+  provider: anthropic
+  model: claude-sonnet-4-6
+agent:
+  system_prompt: |
+    You are a custom agent.
+    Be careful with tokens.
+`), 0644)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Agent.SystemPrompt == "" {
+		t.Error("Agent.SystemPrompt is empty, want non-empty")
+	}
+	if !strings.Contains(cfg.Agent.SystemPrompt, "custom agent") {
+		t.Errorf("Agent.SystemPrompt = %q, want to contain 'custom agent'", cfg.Agent.SystemPrompt)
 	}
 }
 

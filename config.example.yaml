@@ -46,6 +46,15 @@ observability:
   alertmanager:
     url: http://kube-pilot-kube-prometheus-stack-alertmanager.kube-pilot.svc:9093
 
+# Agent behavior — customize the system prompt sent to the LLM.
+# This controls how the agent thinks, plans, and communicates.
+# Dynamic sections (ingress, observability, crossplane, repo context) are appended automatically.
+# Supports Go template variables: {{.GitProvider}}, {{.GiteaURL}}, {{.GiteaHost}}, {{.GiteaRegistryURL}}
+# agent:
+#   system_prompt: |
+#     You are kube-pilot, an autonomous agent that builds, deploys, and operates software on Kubernetes.
+#     ... (see values.yaml for the full default)
+
 # Crossplane — cloud infrastructure provisioning via kubectl (optional)
 # Enable via Helm (crossplane.enabled) to install Crossplane.
 # Then install Providers (AWS, GCP, Azure) via Provider CRs.

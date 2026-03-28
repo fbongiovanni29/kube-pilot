@@ -389,6 +389,25 @@ vault kv put secret/crossplane/aws creds="$(printf '[default]\naws_access_key_id
 
 The agent knows how to work with Crossplane Providers, ProviderConfigs, Managed Resources, Composite Resources (XRDs), Compositions, and Claims. It understands READY/SYNCED status conditions, knows where to find provider logs, and follows the same GitOps workflow as everything else — manifests go through git, ArgoCD syncs them.
 
+### Agent behavior
+
+The system prompt — the instructions that tell the agent how to think, plan, and act — is fully configurable. The default ships with build/deploy/debug workflows, but you can replace it entirely:
+
+```yaml
+agent:
+  systemPrompt: |
+    You are kube-pilot. You build and deploy software on Kubernetes.
+
+    Before starting any task, comment your plan on the issue and wait for approval.
+    Prefer reading logs and metrics before making code changes.
+    If the issue is ambiguous, ask a clarifying question instead of guessing.
+    Keep tool calls minimal — don't explore when you can read.
+
+    ... (your workflow, your rules, your tone)
+```
+
+Go template variables (`{{.GitProvider}}`, `{{.GiteaURL}}`, etc.) are available for git provider details. Dynamic sections (ingress URLs, observability endpoints, Crossplane guidance, repo context from `AGENTS.md`) are appended automatically — you don't need to include those.
+
 ### Toggle components
 
 Everything is optional:

@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"text/template"
 
 	"github.com/fbongiovanni29/kube-pilot/internal/config"
 	kpctx "github.com/fbongiovanni29/kube-pilot/internal/context"
@@ -43,7 +44,7 @@ GitHub (source code hosting):
 `
 
 const systemPromptSuffix = `
-Available CLI tools: kubectl, helm, git, curl, gh, argocd (via kubectl), logcli, amtool, and any standard CLI tool.
+Available CLI tools: kubectl, helm, git, curl, gh, argocd (via kubectl), and any standard CLI tool.
 
 ## Build & Deploy
 
@@ -101,6 +102,7 @@ type Agent struct {
 	ingressConfig       *config.IngressConfig
 	observabilityConfig *config.ObservabilityConfig
 	crossplaneConfig    *config.CrossplaneConfig
+	baseSystemPrompt    string     // user-configurable base prompt from config
 	inbox               chan string // mid-flight messages injected between steps
 	workDir        string     // unique temp directory for this agent's shell commands
 }
@@ -170,6 +172,12 @@ func WithCrossplaneConfig(cfg *config.CrossplaneConfig) Option {
 	return func(a *Agent) { a.crossplaneConfig = cfg }
 }
 
+// WithSystemPrompt sets a custom base system prompt, overriding the compiled-in default.
+// The prompt can use Go template variables: {{.GitProvider}}, {{.GiteaURL}}, {{.GiteaHost}}, {{.GiteaRegistryURL}}.
+func WithSystemPrompt(prompt string) Option {
+	return func(a *Agent) { a.baseSystemPrompt = prompt }
+}
+
 // knownSecrets returns secret values that should be scrubbed from public output.
 func (a *Agent) knownSecrets() []string {
 	var secrets []string
@@ -185,6 +193,12 @@ func (a *Agent) knownSecrets() []string {
 	return secrets
 }
 
+// DumpSystemPrompt returns the fully assembled system prompt for inspection.
+// Useful for validating prompt composition without making LLM calls.
+func (a *Agent) DumpSystemPrompt() string {
+	return a.systemPrompt()
+}
+
 // Inject sends a message into a running agent's conversation.
 // The message will be picked up between steps and added as a user message.
 // Safe to call from any goroutine. Non-blocking (drops if inbox is full).
@@ -197,7 +211,17 @@ func (a *Agent) Inject(msg string) {
 }
 
 
-func (a *Agent) systemPrompt() string {
+// basePrompt returns the base system prompt — either custom (from config) or the compiled-in default.
+// Template variables {{.GitProvider}}, {{.GiteaURL}}, {{.GiteaHost}}, {{.GiteaRegistryURL}} are expanded.
+func (a *Agent) basePrompt() string {
+	if a.baseSystemPrompt != "" {
+		return a.renderBasePrompt(a.baseSystemPrompt)
+	}
+	return a.defaultBasePrompt()
+}
+
+// defaultBasePrompt returns the compiled-in default prompt (the original hardcoded constants).
+func (a *Agent) defaultBasePrompt() string {
 	prompt := systemPromptBase
 	if a.giteaInfo != nil {
 		host := strings.TrimPrefix(strings.TrimPrefix(a.giteaInfo.URL, "http://"), "https://")
@@ -205,6 +229,36 @@ func (a *Agent) systemPrompt() string {
 	} else {
 		prompt += systemPromptGitHub
 	}
+	return prompt
+}
+
+// renderBasePrompt renders a user-provided base prompt template with agent context variables.
+func (a *Agent) renderBasePrompt(tmplStr string) string {
+	t, err := template.New("prompt").Parse(tmplStr)
+	if err != nil {
+		a.logger.Error("failed to parse custom system prompt template, using default", "error", err)
+		return a.defaultBasePrompt()
+	}
+	data := map[string]string{
+		"GitProvider": "github",
+	}
+	if a.giteaInfo != nil {
+		host := strings.TrimPrefix(strings.TrimPrefix(a.giteaInfo.URL, "http://"), "https://")
+		data["GitProvider"] = "gitea"
+		data["GiteaURL"] = a.giteaInfo.URL
+		data["GiteaHost"] = host
+		data["GiteaRegistryURL"] = a.giteaInfo.URL
+	}
+	var buf strings.Builder
+	if err := t.Execute(&buf, data); err != nil {
+		a.logger.Error("failed to render custom system prompt template, using default", "error", err)
+		return a.defaultBasePrompt()
+	}
+	return buf.String()
+}
+
+func (a *Agent) systemPrompt() string {
+	prompt := a.basePrompt()
 	if a.repoContext != "" {
 		prompt += fmt.Sprintf("\n## Repository Context (from AGENTS.md)\n%s\n", a.repoContext)
 	}
@@ -230,6 +284,8 @@ Services should be exposed externally via Ingress resources. When deploying a se
 	if a.observabilityConfig != nil && a.observabilityConfig.Enabled {
 		prompt += `
 ## Observability
+
+Additional CLI tools available: logcli (Loki log queries), amtool (Alertmanager management).
 
 The cluster has monitoring and logging infrastructure. Use these tools proactively:
 - When **investigating failures**: check Loki logs first (fastest signal), then Prometheus metrics for broader patterns
